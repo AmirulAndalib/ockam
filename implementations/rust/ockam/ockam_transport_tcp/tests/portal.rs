@@ -13,13 +13,16 @@ use ockam_transport_tcp::{
 const LENGTH: usize = 32;
 
 async fn setup(ctx: &Context) -> Result<(String, TcpListener)> {
-    let tcp = TcpTransport::create(ctx).await?;
+    let tcp = TcpTransport::create(ctx)?;
 
     let listener = {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let bind_address = listener.local_addr().unwrap().to_string();
-        tcp.create_outlet("outlet", bind_address, TcpOutletOptions::new())
-            .await?;
+        tcp.create_outlet(
+            "outlet",
+            bind_address.try_into().unwrap(),
+            TcpOutletOptions::new(),
+        )?;
         listener
     };
 
@@ -121,7 +124,7 @@ async fn portal__tcp_connection__should_succeed(ctx: &mut Context) -> Result<()>
     let options = TcpListenerOptions::new();
     let outlet_flow_control_id = options.spawner_flow_control_id();
 
-    let tcp = TcpTransport::create(ctx).await?;
+    let tcp = TcpTransport::create(ctx)?;
 
     let listener = tcp.listen("127.0.0.1:0", options).await?;
 
@@ -136,10 +139,9 @@ async fn portal__tcp_connection__should_succeed(ctx: &mut Context) -> Result<()>
     let bind_address = listener.local_addr().unwrap().to_string();
     tcp.create_outlet(
         "outlet",
-        bind_address,
+        bind_address.try_into().unwrap(),
         TcpOutletOptions::new().as_consumer(&outlet_flow_control_id),
-    )
-    .await?;
+    )?;
 
     let inlet = tcp
         .create_inlet(
@@ -178,7 +180,7 @@ async fn portal__tcp_connection_with_invalid_message_flow__should_not_succeed(
 
     let options = TcpListenerOptions::new();
 
-    let tcp = TcpTransport::create(ctx).await?;
+    let tcp = TcpTransport::create(ctx)?;
 
     let tcp_listener = tcp.listen("127.0.0.1:0", options).await?;
 
@@ -189,8 +191,11 @@ async fn portal__tcp_connection_with_invalid_message_flow__should_not_succeed(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let bind_address = listener.local_addr().unwrap().to_string();
 
-    tcp.create_outlet("outlet_invalid", bind_address, TcpOutletOptions::new())
-        .await?;
+    tcp.create_outlet(
+        "outlet_invalid",
+        bind_address.try_into().unwrap(),
+        TcpOutletOptions::new(),
+    )?;
 
     let inlet = tcp
         .create_inlet(
@@ -218,7 +223,7 @@ async fn portal__tcp_connection_with_invalid_message_flow__should_not_succeed(
 
     handle.abort();
 
-    if let Err(e) = ctx.stop().await {
+    if let Err(e) = ctx.shutdown_node().await {
         println!("Unclean stop: {}", e)
     }
 
@@ -231,28 +236,27 @@ async fn portal__update_route__should_succeed(ctx: &mut Context) -> Result<()> {
     let payload1 = generate_binary();
     let payload2 = generate_binary();
 
-    let tcp = TcpTransport::create(ctx).await?;
+    let tcp = TcpTransport::create(ctx)?;
 
     let listener_outlet = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let listener_node = tcp
-        .listen("127.0.0.1:0", TcpListenerOptions::new())
-        .await
-        .unwrap();
+    let listener_node = tcp.listen("127.0.0.1:0", TcpListenerOptions::new()).await?;
 
     tcp.create_outlet(
         "outlet",
-        listener_outlet.local_addr().unwrap().to_string(),
+        listener_outlet
+            .local_addr()
+            .unwrap()
+            .to_string()
+            .try_into()?,
         TcpOutletOptions::new().as_consumer(listener_node.flow_control_id()),
-    )
-    .await?;
+    )?;
 
     let node_connection1 = tcp
         .connect(
             listener_node.socket_address().to_string(),
             TcpConnectionOptions::new(),
         )
-        .await
-        .unwrap();
+        .await?;
     let node_connection2 = tcp
         .connect(
             listener_node.socket_address().to_string(),
@@ -290,9 +294,9 @@ async fn portal__update_route__should_succeed(ctx: &mut Context) -> Result<()> {
     write_binary(&mut stream, payload1).await;
     read_assert_binary(&mut stream, payload2).await;
 
-    node_connection1.stop(ctx).await?;
+    node_connection1.stop(ctx)?;
 
-    inlet.update_outlet_node_route(route![node_connection2])?;
+    inlet.update_outlet_node_route(ctx, route![node_connection2])?;
 
     let mut stream = TcpStream::connect(inlet.socket_address()).await.unwrap();
     write_binary(&mut stream, payload1).await;

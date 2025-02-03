@@ -9,6 +9,7 @@
     unused_import_braces,
     unused_qualifications
 )]
+#![allow(unexpected_cfgs)]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(target = "mips", feature(asm))]
 #![cfg_attr(target = "mips", feature(asm_experimental_arch))]
@@ -38,5 +39,3 @@ pub use types::*;
 
 /// BLE address type constant
 pub const BLE: TransportType = TransportType::new(4);
-
-pub(crate) const CLUSTER_NAME: &str = "_internals.transport.ble";

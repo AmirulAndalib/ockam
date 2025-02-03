@@ -1,16 +1,16 @@
-use std::env;
-
+use crate::CommandGlobalOpts;
 use clap::crate_version;
 use colorful::Colorful;
 use miette::{miette, Error, IntoDiagnostic, Result, WrapErr};
 use ockam_api::colors::{color_primary, color_uri};
 use ockam_api::{fmt_log, fmt_warn};
-use serde::Deserialize;
-use tracing::{debug, warn};
-use url::Url;
-
-use crate::CommandGlobalOpts;
 use ockam_core::env::get_env_with_default;
+use serde::Deserialize;
+use std::env;
+use std::fmt::Display;
+use std::time::Duration;
+use tracing::{debug, info, warn};
+use url::Url;
 
 const RELEASE_TAG_NAME_PREFIX: &str = "ockam_v";
 
@@ -46,6 +46,16 @@ struct Release {
     download_url: Url,
 }
 
+impl Display for Release {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Release version: {}, download URL: {}",
+            self.version, self.download_url
+        )
+    }
+}
+
 impl TryFrom<ReleaseJson> for Release {
     type Error = Error;
 
@@ -57,13 +67,13 @@ impl TryFrom<ReleaseJson> for Release {
     }
 }
 
-pub fn check_if_an_upgrade_is_available(options: &CommandGlobalOpts) -> Result<()> {
+pub async fn check_if_an_upgrade_is_available(options: &CommandGlobalOpts) -> Result<()> {
     if upgrade_check_is_disabled() || options.global_args.test_argument_parser {
         debug!("Upgrade check is disabled");
         return Ok(());
     }
 
-    let latest_release = get_release_data()?;
+    let latest_release = get_release_data().await?;
     let current_version =
         semver::Version::parse(crate_version!()).map_err(|_| miette!("Invalid version"))?;
     let latest_version =
@@ -85,15 +95,17 @@ pub fn check_if_an_upgrade_is_available(options: &CommandGlobalOpts) -> Result<(
             "Or run the following command to upgrade it: {}\n",
             color_primary("brew install build-trust/ockam/ockam")
         ))?;
+    } else {
+        info!("The Ockam Command is up to date");
     }
 
     Ok(())
 }
 
-fn get_release_data() -> Result<Release> {
+async fn get_release_data() -> Result<Release> {
     // All GitHub API requests must include a valid `User-Agent` header.
     // See https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api?apiVersion=2022-11-28#user-agent
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent("ockam")
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
@@ -103,21 +115,35 @@ fn get_release_data() -> Result<Release> {
             );
             headers
         })
+        .timeout(Duration::from_secs(3))
         .build()
         .into_diagnostic()
         .wrap_err("Failed to create a HTTP client")?;
-    let parsed = client
-        .get("https://github.com/build-trust/ockam/releases/latest")
-        .send()
-        .and_then(|resp| resp.json::<ReleaseJson>())
-        .into_diagnostic()
-        .wrap_err("Failed to parse JSON response")?;
-    Release::try_from(parsed)
+    let mut retries_left = 4;
+    while retries_left > 0 {
+        if let Ok(res) = client
+            .get("https://github.com/build-trust/ockam/releases/latest")
+            .send()
+            .await
+        {
+            let json = res
+                .json::<ReleaseJson>()
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to parse JSON response")?;
+            let parsed = Release::try_from(json)?;
+            debug!(data=%parsed, "Got latest release data");
+            return Ok(parsed);
+        }
+        warn!("Failed to retrieve the latest release data from GitHub, retrying...");
+        retries_left -= 1;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    Err(miette!("Couldn't retrieve the release data from GitHub"))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::thread::sleep;
     use std::time::Duration;
 
     use super::*;
@@ -176,16 +202,16 @@ mod tests {
         assert!(Release::try_from(json).is_err());
     }
 
-    #[test]
-    fn get_and_parse_release_data_from_github() {
-        // Make sure that the data received from GitHub is can be parsed correctly
+    #[tokio::test]
+    async fn get_and_parse_release_data_from_github() {
+        // Make sure that the data received from GitHub can be parsed correctly
         let mut is_ok = false;
         for _ in 0..5 {
-            if get_release_data().is_ok() {
+            if get_release_data().await.is_ok() {
                 is_ok = true;
                 break;
             }
-            sleep(Duration::from_secs(2));
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
         assert!(is_ok);
     }

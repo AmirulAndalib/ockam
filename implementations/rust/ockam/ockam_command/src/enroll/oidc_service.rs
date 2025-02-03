@@ -10,9 +10,9 @@ use reqwest::StatusCode;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, instrument};
 
-use ockam_api::cloud::enroll::auth0::*;
 use ockam_api::colors::{color_email, color_uri, OckamColor};
 use ockam_api::enroll::oidc_service::OidcService;
+use ockam_api::orchestrator::enroll::auth0::*;
 use ockam_api::terminal::{Terminal, TerminalStream};
 use ockam_api::{fmt_err, fmt_log, fmt_ok};
 
@@ -69,7 +69,7 @@ impl OidcServiceExt for OidcService {
         }
         // Otherwise, write the instructions at stderr as normal
         else {
-            opts.terminal.write_line(&fmt_log!(
+            opts.terminal.write_line(fmt_log!(
                 "Please sign into your Ockam Account to activate this machine:\n"
             ))?;
 
@@ -103,7 +103,7 @@ impl OidcServiceExt for OidcService {
                 let mut input = String::new();
                 match stdin().read_line(&mut input) {
                     Ok(_) => {
-                        opts.terminal.write_line(&fmt_log!(
+                        opts.terminal.write_line(fmt_log!(
                             "Opening {}, in your browser, to begin activating this machine...\n",
                             color_uri(&device_code.verification_uri)
                         ))?;
@@ -115,7 +115,7 @@ impl OidcServiceExt for OidcService {
                     }
                 }
             } else {
-                opts.terminal.write_line(&fmt_log!(
+                opts.terminal.write_line(fmt_log!(
                     "Open {} in your browser to begin activating this machine.\n",
                     color_uri(&device_code.verification_uri)
                 ))?;
@@ -144,7 +144,7 @@ impl OidcServiceExt for OidcService {
         token: &OidcToken,
         terminal: Option<&Terminal<TerminalStream<Term>>>,
     ) -> Result<UserInfo> {
-        let pb = terminal.and_then(|t| t.progress_bar());
+        let pb = terminal.and_then(|t| t.spinner());
         if let Some(spinner) = pb.as_ref() {
             spinner.set_message("Verifying email...");
             sleep(Duration::from_millis(500)).await;
@@ -183,8 +183,8 @@ impl OidcServiceExt for OidcService {
         uri: String,
     ) -> Result<OidcToken> {
         if open::that(uri.clone()).is_err() {
-            opts.terminal.write_line(&fmt_err!(
-                "Couldn't open activation URL automatically [URL={}]",
+            opts.terminal.write_line(fmt_err!(
+                "Couldn't open your browser from the terminal. Please open {} manually.",
                 color_uri(&uri)
             ))?;
         }
@@ -200,8 +200,8 @@ impl OidcServiceExt for OidcService {
         let provider = self.provider();
         let client = provider.build_http_client()?;
         let token;
-        let pb = opts.terminal.progress_bar();
-        if let Some(spinner) = pb.as_ref() {
+        let sp = opts.terminal.spinner();
+        if let Some(spinner) = sp.as_ref() {
             let msg = format!(
                 "{} {} {}",
                 "Waiting for you to complete activating",
@@ -229,7 +229,7 @@ impl OidcServiceExt for OidcService {
                 StatusCode::OK => {
                     token = res.json::<OidcToken>().await.into_diagnostic()?;
                     debug!(?token, "token response received");
-                    if let Some(spinner) = pb.as_ref() {
+                    if let Some(spinner) = sp.as_ref() {
                         spinner.finish_and_clear();
                     }
                     return Ok(token);

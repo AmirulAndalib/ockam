@@ -3,15 +3,15 @@ use std::time::Duration;
 
 use ockam_core::api::Response;
 use ockam_core::compat::sync::Arc;
-use ockam_core::{async_trait, Any, AsyncTryClone, Routed, Worker};
+use ockam_core::{async_trait, Any, Routed, SecureChannelLocalInfo, TryClone, Worker};
 use ockam_core::{route, Result};
 use ockam_identity::models::CredentialSchemaIdentifier;
 use ockam_identity::secure_channels::secure_channels;
 use ockam_identity::utils::AttributesBuilder;
 use ockam_identity::{
-    Credentials, Identifier, IdentitySecureChannelLocalInfo, RemoteCredentialRetrieverCreator,
-    RemoteCredentialRetrieverInfo, RemoteCredentialRetrieverTimingOptions,
-    SecureChannelListenerOptions, SecureChannelOptions, SecureChannels,
+    Credentials, Identifier, RemoteCredentialRetrieverCreator, RemoteCredentialRetrieverInfo,
+    RemoteCredentialRetrieverTimingOptions, SecureChannelListenerOptions, SecureChannelOptions,
+    SecureChannels,
 };
 use ockam_node::Context;
 use ockam_transport_tcp::TcpTransport;
@@ -39,8 +39,10 @@ impl Worker for CredentialIssuer {
             return Ok(());
         }
 
-        let subject =
-            IdentitySecureChannelLocalInfo::find_info(msg.local_message())?.their_identity_id();
+        let msg = msg.into_local_message();
+        let subject = SecureChannelLocalInfo::find_info(&msg)?
+            .their_identifier()
+            .into();
         let credential = self
             .credentials
             .credentials_creation()
@@ -59,7 +61,7 @@ impl Worker for CredentialIssuer {
         self.call_counter.fetch_add(1, Ordering::Relaxed);
 
         ctx.sleep(self.delay).await;
-        ctx.send(msg.return_route(), response).await?;
+        ctx.send(msg.return_route, response).await?;
 
         Ok(())
     }
@@ -208,7 +210,7 @@ async fn init(
     ttl: Duration,
     timing_options: RemoteCredentialRetrieverTimingOptions,
 ) -> Result<InitResult> {
-    let tcp = TcpTransport::create(ctx).await?;
+    let tcp = TcpTransport::create(ctx)?;
 
     let client_secure_channels = secure_channels().await?;
     let authority_secure_channels = secure_channels().await?;
@@ -250,31 +252,27 @@ async fn init(
         ttl,
     };
 
-    ctx.start_worker("credential_issuer", issuer).await?;
+    ctx.start_worker("credential_issuer", issuer)?;
 
-    let listener = authority_secure_channels
-        .create_secure_channel_listener(
-            ctx,
-            &authority,
-            "authority_api",
-            SecureChannelListenerOptions::new(),
-        )
-        .await?;
+    let listener = authority_secure_channels.create_secure_channel_listener(
+        ctx,
+        &authority,
+        "authority_api",
+        SecureChannelListenerOptions::new(),
+    )?;
 
     ctx.flow_controls()
-        .add_consumer("credential_issuer", listener.flow_control_id());
+        .add_consumer(&"credential_issuer".into(), listener.flow_control_id());
 
-    server_secure_channels
-        .create_secure_channel_listener(
-            ctx,
-            &server,
-            "server_api",
-            SecureChannelListenerOptions::new().with_authority(authority.clone()),
-        )
-        .await?;
+    server_secure_channels.create_secure_channel_listener(
+        ctx,
+        &server,
+        "server_api",
+        SecureChannelListenerOptions::new().with_authority(authority.clone()),
+    )?;
 
     let retriever = Arc::new(RemoteCredentialRetrieverCreator::new_extended(
-        ctx.async_try_clone().await?,
+        ctx.try_clone()?,
         Arc::new(tcp),
         client_secure_channels.clone(),
         RemoteCredentialRetrieverInfo::create_for_project_member(

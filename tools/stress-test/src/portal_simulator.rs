@@ -8,10 +8,12 @@ use ockam::compat::tokio;
 use ockam::{Context, Processor, Route, Routed, Worker};
 use ockam_api::nodes::InMemoryNode;
 use ockam_core::flow_control::FlowControlId;
-use ockam_core::{async_trait, route, Address, AllowAll, DenyAll, NeutralMessage};
+use ockam_core::{async_trait, Address, AllowAll, DenyAll, NeutralMessage};
 use ockam_multiaddr::MultiAddr;
 
 use crate::config::Throughput;
+
+pub const MAX_PAYLOAD_SIZE: usize = 128 * 1024;
 
 pub struct PortalStats {
     pub messages_out_of_order: Arc<AtomicU64>,
@@ -43,7 +45,7 @@ pub async fn create(
 
     context
         .flow_controls()
-        .add_consumer(receiver_address.clone(), &relay_flow_control_id);
+        .add_consumer(&receiver_address, &relay_flow_control_id);
 
     let worker = PortalSimulatorReceiver {
         messages_out_of_order: portal_stats.messages_out_of_order.clone(),
@@ -54,15 +56,14 @@ pub async fn create(
 
     context
         .start_worker(receiver_address.clone(), worker)
-        .await
         .unwrap();
 
     let connection = node
-        .make_connection(context.clone(), &to, node.identifier(), None, None)
+        .make_connection(&context, &to, node.identifier(), None, None)
         .await?;
 
     let processor = PortalSimulatorSender {
-        to: route![connection.route()?, relay_address, receiver_address],
+        to: connection.route()? + relay_address + receiver_address,
         throughput,
         bytes_sent: portal_stats.bytes_sent.clone(),
         messages_sent: portal_stats.messages_sent.clone(),
@@ -70,7 +71,6 @@ pub async fn create(
 
     context
         .start_processor_with_access_control(sender_address, processor, DenyAll, AllowAll)
-        .await
         .unwrap();
 
     Ok(portal_stats)
@@ -97,7 +97,7 @@ impl Processor for PortalSimulatorSender {
 
         while bytes_left > 0 {
             let next_message_number = self.messages_sent.fetch_add(1, Ordering::Relaxed);
-            let payload_size = std::cmp::min(bytes_left, 48 * 1024);
+            let payload_size = std::cmp::min(bytes_left, MAX_PAYLOAD_SIZE);
             let mut message = Vec::with_capacity(8 + 8 + payload_size);
 
             message.extend_from_slice(&next_message_number.to_le_bytes());

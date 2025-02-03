@@ -1,9 +1,10 @@
-use crate::cloud::project::Project;
 use crate::nodes::service::{
     CredentialScope, NodeManagerCredentialRetrieverOptions, NodeManagerTrustOptions,
 };
 use crate::nodes::NodeManager;
-use crate::{multiaddr_to_transport_route, CliState};
+use crate::orchestrator::project::Project;
+use crate::{ApiError, CliState, TransportRouteResolver};
+use ockam::identity::models::ChangeHistory;
 use ockam::identity::{IdentitiesVerification, RemoteCredentialRetrieverInfo};
 use ockam_core::errcode::{Kind, Origin};
 use ockam_core::{Error, Result};
@@ -45,12 +46,16 @@ impl CliState {
                 }
             };
 
-            let authority_route =
-                multiaddr_to_transport_route(authority_multiaddr).ok_or(Error::new(
-                    Origin::Api,
-                    Kind::NotFound,
-                    format!("Invalid authority route: {}", &authority_multiaddr),
-                ))?;
+            let authority_route = TransportRouteResolver::default()
+                .allow_tcp()
+                .resolve(authority_multiaddr)
+                .map_err(|err| {
+                    Error::new(
+                        Origin::Api,
+                        Kind::NotFound,
+                        format!("Invalid authority route. Err: {}", &err),
+                    )
+                })?;
             let info = RemoteCredentialRetrieverInfo::create_for_project_member(
                 authority_identifier.clone(),
                 authority_route,
@@ -109,14 +114,20 @@ impl CliState {
         &self,
         project: Project,
     ) -> Result<NodeManagerTrustOptions> {
-        let authority_identifier = project.authority_identifier()?;
+        let authority_identifier = project
+            .authority_identifier()
+            .ok_or_else(|| ApiError::core("no authority identifier"))?;
         let authority_multiaddr = project.authority_multiaddr()?;
-        let authority_route =
-            multiaddr_to_transport_route(authority_multiaddr).ok_or(Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                format!("Invalid authority route: {}", &authority_multiaddr),
-            ))?;
+        let authority_route = TransportRouteResolver::default()
+            .allow_tcp()
+            .resolve(authority_multiaddr)
+            .map_err(|err| {
+                Error::new(
+                    Origin::Api,
+                    Kind::NotFound,
+                    format!("Invalid authority route. Err: {}", &err),
+                )
+            })?;
 
         let project_id = project.project_id().to_string();
         let project_member_retriever = NodeManagerCredentialRetrieverOptions::Remote {
@@ -176,11 +187,11 @@ impl CliState {
     ///  1. Either we explicitly know the Authority identity that we trust, and optionally route to its node to request
     ///     a new credential
     ///  2. Or we know the project name (or have default one) that contains identity and route to the Authority node
-    #[instrument(skip_all, fields(project_name = project_name.clone(), authority_identity = authority_identity.clone(), authority_route = authority_route.clone().map_or("n/a".to_string(), |r| r.to_string())))]
+    #[instrument(skip_all, fields(project_name = project_name.clone(), authority_identity = authority_identity.as_ref().map(|a| a.to_string()).unwrap_or("n/a".to_string()), authority_route = authority_route.clone().map_or("n/a".to_string(), |r| r.to_string())))]
     pub async fn retrieve_trust_options(
         &self,
         project_name: &Option<String>,
-        authority_identity: &Option<String>,
+        authority_identity: &Option<ChangeHistory>,
         authority_route: &Option<MultiAddr>,
         credential_scope: &Option<String>,
     ) -> Result<NodeManagerTrustOptions> {
@@ -204,7 +215,7 @@ impl CliState {
         if let Some(authority_identity) = authority_identity {
             return self
                 .retrieve_trust_options_explicit_project_authority(
-                    authority_identity,
+                    &authority_identity.export_as_string()?,
                     authority_route,
                     credential_scope,
                 )
@@ -228,6 +239,16 @@ impl CliState {
                 ));
             }
         };
+
+        if project.authority_identifier().is_none() {
+            debug!("TrustOptions configured: No Authority. No Credentials");
+            return Ok(NodeManagerTrustOptions::new(
+                NodeManagerCredentialRetrieverOptions::None,
+                NodeManagerCredentialRetrieverOptions::None,
+                None,
+                NodeManagerCredentialRetrieverOptions::None,
+            ));
+        }
 
         self.retrieve_trust_options_with_project(project).await
     }

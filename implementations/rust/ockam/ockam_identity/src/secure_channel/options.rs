@@ -1,3 +1,5 @@
+use cfg_if::cfg_if;
+
 use ockam_core::compat::sync::Arc;
 use ockam_core::compat::vec::Vec;
 use ockam_core::flow_control::{FlowControlId, FlowControlOutgoingAccessControl, FlowControls};
@@ -13,9 +15,15 @@ use crate::{
 use core::fmt;
 use core::fmt::Formatter;
 use core::time::Duration;
+#[cfg(feature = "std")]
+use ockam_core::env::get_env_with_default;
 
 /// This is the default timeout for creating a secure channel
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+pub(super) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Environment variable name for changing the default timeout used to create secure channels
+/// or make a request
+pub const OCKAM_DEFAULT_TIMEOUT: &str = "OCKAM_DEFAULT_TIMEOUT";
 
 /// Trust options for a Secure Channel
 pub struct SecureChannelOptions {
@@ -120,7 +128,7 @@ impl SecureChannelOptions {
         addresses: &Addresses,
     ) {
         flow_controls.add_producer(
-            addresses.decryptor_internal.clone(),
+            &addresses.decryptor_internal,
             flow_control_id,
             None,
             vec![addresses.encryptor.clone()],
@@ -137,7 +145,7 @@ impl SecureChannelOptions {
             .map(|x| x.flow_control_id().clone())
         {
             // Allow a sender with corresponding flow_control_id send messages to this address
-            flow_controls.add_consumer(addresses.decryptor_remote.clone(), &flow_control_id);
+            flow_controls.add_consumer(&addresses.decryptor_remote, &flow_control_id);
         }
     }
 
@@ -273,10 +281,10 @@ impl SecureChannelListenerOptions {
         address: &Address,
     ) {
         for id in &self.consumer {
-            flow_controls.add_consumer(address.clone(), id);
+            flow_controls.add_consumer(address, id);
         }
 
-        flow_controls.add_spawner(address.clone(), &self.flow_control_id);
+        flow_controls.add_spawner(address, &self.flow_control_id);
     }
 
     pub(crate) fn setup_flow_control_for_channel(
@@ -288,7 +296,7 @@ impl SecureChannelListenerOptions {
         // Add decryptor as consumer for the same ids as the listener, so that even if the initiator
         // updates the route - decryptor is still reachable
         for id in flow_controls.get_flow_control_ids_for_consumer(listener_address) {
-            flow_controls.add_consumer(addresses.decryptor_remote.clone(), &id);
+            flow_controls.add_consumer(&addresses.decryptor_remote, &id);
         }
 
         // TODO: What if we added a listener as a consumer for new FlowControlIds, should existing
@@ -302,7 +310,7 @@ impl SecureChannelListenerOptions {
 
         let flow_control_id = FlowControls::generate_flow_control_id();
         flow_controls.add_producer(
-            addresses.decryptor_internal.clone(),
+            &addresses.decryptor_internal,
             &flow_control_id,
             Some(&self.flow_control_id),
             vec![addresses.encryptor.clone()],
@@ -323,5 +331,18 @@ impl SecureChannelListenerOptions {
         );
 
         Arc::new(ac)
+    }
+}
+
+/// Return a default timeout for creating secure channels or make a request
+pub fn get_default_timeout() -> Duration {
+    cfg_if! {
+        if #[cfg(feature = "std")] {
+            get_env_with_default::<Duration>(OCKAM_DEFAULT_TIMEOUT, DEFAULT_TIMEOUT)
+              .ok()
+              .unwrap_or(DEFAULT_TIMEOUT)
+        } else {
+            DEFAULT_TIMEOUT
+        }
     }
 }

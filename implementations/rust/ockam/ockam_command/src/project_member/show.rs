@@ -7,11 +7,10 @@ use std::str::FromStr;
 use ockam::identity::Identifier;
 use ockam::Context;
 use ockam_api::authenticator::direct::Members;
-use ockam_api::cloud::AuthorityNodeClient;
+use ockam_api::orchestrator::AuthorityNodeClient;
 use ockam_api::output::Output;
 use ockam_api::terminal::{Terminal, TerminalStream};
-use ockam_core::AsyncTryClone;
-use ockam_multiaddr::MultiAddr;
+use ockam_core::TryClone;
 
 use crate::project_member::{authority_client, MemberOutput};
 use crate::shared_args::IdentityOpts;
@@ -32,9 +31,9 @@ pub struct ShowCommand {
     #[command(flatten)]
     identity_opts: IdentityOpts,
 
-    /// The route of the Project that the member belongs to
-    #[arg(long, short, value_name = "ROUTE_TO_PROJECT")]
-    to: Option<MultiAddr>,
+    /// The Project that the member belongs to
+    #[arg(long, short, value_name = "PROJECT_NAME")]
+    project_name: Option<String>,
 
     /// The Identifier of the member to show
     #[arg(value_name = "IDENTIFIER")]
@@ -45,8 +44,8 @@ pub struct ShowCommand {
 impl Command for ShowCommand {
     const NAME: &'static str = "project-member show";
 
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
-        Ok(ShowTui::run(ctx.async_try_clone().await.into_diagnostic()?, opts, self).await?)
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+        Ok(ShowTui::run(ctx.try_clone().into_diagnostic()?, opts, self).await?)
     }
 }
 
@@ -64,7 +63,7 @@ impl ShowTui {
         cmd: ShowCommand,
     ) -> miette::Result<()> {
         let (authority_node_client, _) =
-            authority_client(&ctx, &opts, &cmd.identity_opts, &cmd.to).await?;
+            authority_client(&ctx, &opts, &cmd.identity_opts, &cmd.project_name).await?;
         let tui = Self {
             ctx,
             opts,

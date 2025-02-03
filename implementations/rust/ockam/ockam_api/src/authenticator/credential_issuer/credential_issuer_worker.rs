@@ -5,14 +5,12 @@ use tracing::trace;
 use crate::authenticator::credential_issuer::CredentialIssuer;
 use crate::authenticator::direct::AccountAuthorityInfo;
 use crate::authenticator::AuthorityMembersRepository;
-use ockam::identity::{
-    Credentials, Identifier, IdentitiesAttributes, IdentitySecureChannelLocalInfo,
-};
+use ockam::identity::{Credentials, Identifier, IdentitiesAttributes};
 use ockam_core::api::{Method, RequestHeader, Response};
 use ockam_core::compat::boxed::Box;
 use ockam_core::compat::sync::Arc;
 use ockam_core::compat::vec::Vec;
-use ockam_core::{Result, Routed, Worker};
+use ockam_core::{Result, Routed, SecureChannelLocalInfo, Worker};
 use ockam_node::Context;
 
 /// This struct runs as a Worker to issue credentials based on a request/response protocol
@@ -54,18 +52,17 @@ impl Worker for CredentialIssuerWorker {
     type Message = Vec<u8>;
 
     async fn handle_message(&mut self, c: &mut Context, m: Routed<Self::Message>) -> Result<()> {
-        let secure_channel_info = match IdentitySecureChannelLocalInfo::find_info(m.local_message())
-        {
+        let secure_channel_info = match SecureChannelLocalInfo::find_info(m.local_message()) {
             Ok(secure_channel_info) => secure_channel_info,
             Err(_e) => {
                 let resp = Response::bad_request_no_request("secure channel required").to_vec()?;
-                c.send(m.return_route(), resp).await?;
+                c.send(m.return_route().clone(), resp).await?;
                 return Ok(());
             }
         };
 
-        let from = secure_channel_info.their_identity_id();
-        let return_route = m.return_route();
+        let from = Identifier::from(secure_channel_info.their_identifier());
+        let return_route = m.return_route().clone();
         let body = m.into_body()?;
         let mut dec = Decoder::new(&body);
         let req: RequestHeader = dec.decode()?;

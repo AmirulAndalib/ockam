@@ -250,7 +250,7 @@ function update_docs_repo() {
   # Check if the branch was created, new branch is only created when there are new doc updates
   if gh api "repos/build-trust/ockam-documentation/branches/docs_${release_name}" --jq .name; then
     gh pr create --title "Ockam Release $(date +'%d-%m-%Y')" --body "Ockam release" \
-      --base main -H "docs_${release_name}" -r nazmulidris -R $OWNER/ockam-documentation
+      --base main -H "docs_${release_name}" -r mrinalwadhwa -R $OWNER/ockam-documentation
   fi
 }
 
@@ -271,6 +271,24 @@ function update_command_manual() {
 
   gh pr create --title "Ockam command manual update to $release" --body "Ockam commnad manual update $release" \
     --base command -H "manual_${release_name}" -R $OWNER/ockam-documentation >>$log
+}
+
+function update_rendezvous_service() {
+  set -e
+  workflow_file_name="bump-rendezvous-prod.yml"
+  branch="main"
+  release_tag="$1"
+
+  prefix="ockam_v"
+  release=${release_tag#"$prefix"}
+
+  gh workflow run "$workflow_file_name" --ref "$branch" -R $OWNER/infrastructure -F ockam_version="$release" -F release_branch="$release_name" >>$log
+  # Wait for workflow run
+  sleep 10
+
+  approve_and_watch_workflow_progress "infrastructure" "$workflow_file_name" "$branch"
+  gh pr create --title "Rendezvous Prod Service Update to $release" --body "Rendezvous Prod Service Update" \
+    --base main -H "$release_name" -R $OWNER/infrastructure >>$log
 }
 
 function delete_ockam_draft_package() {
@@ -327,6 +345,8 @@ else
   latest_tag_name="$LATEST_TAG_NAME"
 fi
 
+release_version="${latest_tag_name//ockam_/}"
+
 if [[ $IS_DRAFT_RELEASE == true ]]; then
   # Get File hash from draft release
   echo "Retrieving Ockam file SHA"
@@ -335,8 +355,7 @@ if [[ $IS_DRAFT_RELEASE == true ]]; then
   temp_dir=$(mktemp -d)
   pushd "$temp_dir"
 
-  version="${latest_tag_name//ockam_/}"
-  curl -O -R "${OCKAM_RELEASE_URL}/${version}/sha256sums.txt"
+  curl -O -R "${OCKAM_RELEASE_URL}/${release_version}/sha256sums.txt"
 
   # TODO Ensure that SHA are cosign verified
   while read -r line; do
@@ -354,14 +373,14 @@ if [[ $IS_DRAFT_RELEASE == true ]]; then
 
   if [[ -z $SKIP_OCKAM_PACKAGE_RELEASE || $SKIP_OCKAM_PACKAGE_RELEASE == false ]]; then
     echo "Releasing Ockam docker image"
-    release_ockam_package "$latest_tag_name" "$file_and_sha" false
+    release_ockam_package "$release_version" "$file_and_sha" false
     success_info "Ockam docker package draft release successful...."
   fi
 
   # Homebrew Release
   if [[ -z $SKIP_HOMEBREW_BUMP || $SKIP_HOMEBREW_BUMP == false ]]; then
     echo "Bumping Homebrew"
-    homebrew_repo_bump "$latest_tag_name" "$file_and_sha"
+    homebrew_repo_bump "$release_version" "$file_and_sha"
     success_info "Homebrew release successful...."
   fi
 
@@ -387,7 +406,7 @@ if [[ $IS_DRAFT_RELEASE == false ]]; then
   # Check if the SHAsum file exists for the released binaries. We generate shasum file
   # after all binaries are released.
   if [[ -z $SKIP_OCKAM_DRAFT_RELEASE || $SKIP_OCKAM_DRAFT_RELEASE == false ]]; then
-    gh release download "$latest_tag_name" -p sha256sums.txt -R $OWNER/ockam -O "$(mktemp -d)/sha256sums.txt"
+    curl -O -R "${OCKAM_RELEASE_URL}/${release_version}/sha256sums.txt"
   fi
 
   # Check if there's an homebrew PR
@@ -427,7 +446,7 @@ if [[ $IS_DRAFT_RELEASE == false ]]; then
   # Release Ockam package
   if [[ -z $SKIP_OCKAM_PACKAGE_RELEASE || $SKIP_OCKAM_PACKAGE_RELEASE == false ]]; then
     echo "Making Ockam container latest"
-    release_ockam_package "$latest_tag_name" "nil" true
+    release_ockam_package "$release_version" "nil" true
     delete_ockam_draft_package
     success_info "Ockam package release successful."
   fi
@@ -436,6 +455,13 @@ if [[ $IS_DRAFT_RELEASE == false ]]; then
     echo "Starting Crates IO publish"
     ockam_crate_release "$latest_tag_name"
     success_info "Crates.io publish successful."
+  fi
+
+  # Update rendezvous version
+  if [[ -z $SKIP_RENDEZVOUS_SERVICE_UPDATE || $SKIP_RENDEZVOUS_SERVICE_UPDATE == false ]]; then
+    echo "Updating rendezvous service version"
+    update_rendezvous_service "$latest_tag_name"
+    success_info "Ockam Rendezvous version updated successfully"
   fi
 
   success_info "Release Done 🚀🚀🚀."

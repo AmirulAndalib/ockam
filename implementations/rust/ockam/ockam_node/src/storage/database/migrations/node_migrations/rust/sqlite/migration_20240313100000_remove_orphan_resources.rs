@@ -1,5 +1,5 @@
 use crate::database::migrations::RustMigration;
-use crate::database::{FromSqlxError, ToVoid};
+use crate::database::{FromSqlxError, SqlxDatabase, ToVoid, Version};
 use ockam_core::{async_trait, Result};
 use sqlx::*;
 
@@ -13,19 +13,23 @@ impl RustMigration for RemoveOrphanResources {
         Self::name()
     }
 
-    fn version(&self) -> i64 {
+    fn version(&self) -> Version {
         Self::version()
     }
 
-    async fn migrate(&self, connection: &mut AnyConnection) -> Result<bool> {
+    async fn migrate(
+        &self,
+        _legacy_sqlite_database: Option<SqlxDatabase>,
+        connection: &mut AnyConnection,
+    ) -> Result<()> {
         Self::migrate(connection).await
     }
 }
 
 impl RemoveOrphanResources {
     /// Migration version
-    pub fn version() -> i64 {
-        20240313100000
+    pub fn version() -> Version {
+        Version(20240313100000)
     }
 
     /// Migration name
@@ -33,7 +37,7 @@ impl RemoveOrphanResources {
         "migration_20240313100000_remove_orphan_resources"
     }
 
-    pub(crate) async fn migrate(connection: &mut AnyConnection) -> Result<bool> {
+    pub(crate) async fn migrate(connection: &mut AnyConnection) -> Result<()> {
         let mut transaction = Connection::begin(&mut *connection).await.into_core()?;
 
         // Get existing node names
@@ -65,7 +69,7 @@ impl RemoveOrphanResources {
         // Commit
         transaction.commit().await.void()?;
 
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -96,15 +100,16 @@ mod test {
     async fn test_migration() -> Result<()> {
         // create the database pool and migrate the tables
         let db_file = NamedTempFile::new().unwrap();
+        let db_file = db_file.path();
 
-        let pool = SqlxDatabase::create_sqlite_connection_pool(db_file.path()).await?;
-
-        let mut connection = pool.acquire().await.into_core()?;
+        let pool = SqlxDatabase::create_sqlite_single_connection_pool(db_file).await?;
 
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to_skip_last_rust_migration(&pool, RemoveOrphanResources::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // insert a node
         query("INSERT INTO node (name, identifier, verbosity, is_default, is_authority) VALUES ($1, $2, $3, $4, $5)")
@@ -130,11 +135,16 @@ mod test {
         resource4.execute(&mut *connection).await.void()?;
         resource5.execute(&mut *connection).await.void()?;
 
+        // SQLite EXCLUSIVE lock needs exactly one connection during the migration
+        drop(connection);
+
         // apply migrations
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to(&pool, RemoveOrphanResources::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // check that the resources of "n1" are still there
         // and that the resources of "n2" and "n3" are not

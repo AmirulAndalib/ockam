@@ -1,11 +1,11 @@
 #![allow(missing_docs)]
-
+#![allow(unexpected_cfgs)]
 use core::fmt::{self, Display, Formatter};
 use hashbrown::HashMap;
 
 use minicbor::data::Type;
 use minicbor::encode::{self, Encoder, Write};
-use minicbor::{Decode, Decoder, Encode};
+use minicbor::{CborLen, Decode, Decoder, Encode};
 use serde::{Serialize, Serializer};
 use tinyvec::ArrayVec;
 
@@ -18,7 +18,7 @@ use crate::errcode::{Kind, Origin};
 use crate::Result;
 
 /// A request header.
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct RequestHeader {
@@ -54,7 +54,7 @@ impl RequestHeader {
 }
 
 /// The response header.
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct ResponseHeader {
@@ -125,7 +125,7 @@ impl<T: Serialize> Serialize for Reply<T> {
         match self {
             Reply::Successful(t) => t.serialize(serializer),
             Reply::Failed(e, Some(s)) => {
-                let mut map = HashMap::new();
+                let mut map: HashMap<&str, String> = Default::default();
                 map.insert("error", e.to_string());
                 map.insert("status", s.to_string());
                 serializer.collect_map(map)
@@ -203,12 +203,12 @@ impl<T> Reply<T> {
 }
 
 /// A request/response identifier.
-#[derive(Debug, Default, Copy, Clone, Encode, Decode, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Copy, Clone, Encode, Decode, CborLen, PartialEq, Eq, PartialOrd, Ord)]
 #[cbor(transparent)]
 pub struct Id(#[n(0)] u32);
 
 /// Request methods.
-#[derive(Debug, Copy, Clone, Encode, Decode)]
+#[derive(Debug, Copy, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(index_only)]
 pub enum Method {
@@ -232,7 +232,7 @@ impl Display for Method {
 }
 
 /// The response status codes.
-#[derive(Debug, Copy, Clone, Encode, Decode, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, Encode, Decode, CborLen, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 #[rustfmt::skip]
 #[cbor(index_only)]
@@ -335,7 +335,7 @@ impl ResponseHeader {
 }
 
 /// An error type used in response bodies.
-#[derive(Debug, Clone, Default, Encode, Decode)]
+#[derive(Debug, Clone, Default, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct Error {
@@ -658,25 +658,29 @@ impl Response<()> {
 
 /// These functions create standard responses
 impl Response {
-    fn builder(re: Id, status: Status) -> Response {
+    fn with_status(re: Id, status: Status) -> Response {
         Response {
             header: ResponseHeader::new(re, status, false),
             body: None,
         }
     }
 
+    pub fn with_status_no_request(status: Status) -> Response {
+        Response::with_status(Id::default(), status)
+    }
+
     pub fn error(r: &RequestHeader, msg: &str, status: Status) -> Response<Error> {
         let e = Error::from_failed_request(r, msg);
-        Response::builder(r.id(), status).body(e)
+        Response::with_status(r.id(), status).body(e)
     }
 
     pub fn ok() -> Response {
-        Response::builder(Id::default(), Status::Ok)
+        Response::with_status(Id::default(), Status::Ok)
     }
 
     pub fn bad_request_no_request(msg: &str) -> Response<Error> {
         let e = Error::new_without_path().with_message(msg);
-        Response::builder(Id::default(), Status::BadRequest).body(e)
+        Response::with_status(Id::default(), Status::BadRequest).body(e)
     }
 
     /// Create a generic bad request response.
@@ -690,19 +694,24 @@ impl Response {
 
     pub fn not_found_no_request(msg: &str) -> Response<Error> {
         let e = Error::new_without_path().with_message(msg);
-        Response::builder(Id::default(), Status::NotFound).body(e)
+        Response::with_status(Id::default(), Status::NotFound).body(e)
     }
 
     pub fn not_implemented(re: Id) -> Response {
-        Response::builder(re, Status::NotImplemented)
+        Response::with_status(re, Status::NotImplemented)
     }
 
     pub fn unauthorized(re: Id) -> Response {
-        Response::builder(re, Status::Unauthorized)
+        Response::with_status(re, Status::Unauthorized)
+    }
+
+    pub fn unauthorized_no_request(msg: &str) -> Response<Error> {
+        let e = Error::new_without_path().with_message(msg);
+        Response::with_status(Id::default(), Status::Unauthorized).body(e)
     }
 
     pub fn forbidden_no_request(re: Id) -> Response {
-        Response::builder(re, Status::Forbidden)
+        Response::with_status(re, Status::Forbidden)
     }
 
     /// Create an error response with status forbidden and the given message.
@@ -711,13 +720,13 @@ impl Response {
         if let Some(m) = r.method() {
             e = e.with_method(m)
         }
-        Response::builder(r.id(), Status::Forbidden).body(e)
+        Response::with_status(r.id(), Status::Forbidden).body(e)
     }
 
     pub fn internal_error_no_request(msg: &str) -> Response<Error> {
         error!(%msg);
         let e = Error::new_without_path().with_message(msg);
-        Response::builder(Id::default(), Status::InternalServerError).body(e)
+        Response::with_status(Id::default(), Status::InternalServerError).body(e)
     }
 
     /// Create an internal server error response
@@ -726,7 +735,7 @@ impl Response {
         if let Some(m) = r.method() {
             e = e.with_method(m)
         }
-        Response::builder(r.id(), Status::InternalServerError).body(e)
+        Response::with_status(r.id(), Status::InternalServerError).body(e)
     }
 
     /// Create an error response because the request path was unknown.
@@ -739,7 +748,7 @@ impl Response {
         match r.method() {
             Some(m) => {
                 let e = Error::new(r.path()).with_method(m);
-                Response::builder(r.id(), Status::MethodNotAllowed).body(e)
+                Response::with_status(r.id(), Status::MethodNotAllowed).body(e)
             }
             None => {
                 let e = Error::new(r.path()).with_message("unknown method");
@@ -781,7 +790,7 @@ impl Response {
                         ))
                     }
                 }
-                // otherwise return a decoding error
+            // otherwise return a decoding error
             } else {
                 Err(crate::Error::new(
                     Origin::Api,
@@ -789,19 +798,19 @@ impl Response {
                     "expected a message body, got nothing".to_string(),
                 ))
             }
-            // if the status is not ok, try to read the response body as an error
+        // if the status is not ok, try to read the response body as an error
         } else {
-            let error = if matches!(decoder.datatype(), Ok(Type::String)) {
-                decoder
-                    .decode::<String>()
-                    .map(|msg| Error::new_without_path().with_message(msg))
-            } else {
-                decoder.decode::<Error>()
-            };
-            match error {
-                Ok(e) => Ok(Reply::Failed(e, response.status())),
-                Err(e) => Err(crate::Error::new(Origin::Api, Kind::Serialization, e)),
-            }
+            Self::parse_error::<T>(&mut decoder, response.status())
+        }
+    }
+
+    /// Parse the response header
+    pub fn parse_response_reply_with_empty_body(bytes: &[u8]) -> Result<Reply<()>> {
+        let (response, mut decoder) = Self::parse_response_header(bytes)?;
+        if response.is_ok() {
+            Ok(Reply::Successful(()))
+        } else {
+            Self::parse_error(&mut decoder, response.status())
         }
     }
 
@@ -817,6 +826,20 @@ impl Response {
         let mut dec = Decoder::new(bytes);
         let hdr = dec.decode::<ResponseHeader>()?;
         Ok((hdr, dec))
+    }
+
+    fn parse_error<T>(decoder: &mut Decoder, status: Option<Status>) -> Result<Reply<T>> {
+        let error = if matches!(decoder.datatype(), Ok(Type::String)) {
+            decoder
+                .decode::<String>()
+                .map(|msg| Error::new_without_path().with_message(msg))
+        } else {
+            decoder.decode::<Error>()
+        };
+        match error {
+            Ok(e) => Ok(Reply::Failed(e, status)),
+            Err(e) => Err(crate::Error::new(Origin::Api, Kind::Serialization, e)),
+        }
     }
 }
 
@@ -862,6 +885,7 @@ mod tests {
     use quickcheck::{quickcheck, Arbitrary, Gen, TestResult};
 
     use crate::cbor::schema::tests::validate_with_schema;
+    use crate::cbor_encode_preallocate;
 
     use super::*;
 
@@ -879,9 +903,9 @@ mod tests {
         }
 
         fn type_check(a: RequestHeader, b: ResponseHeader, c: Error) -> TestResult {
-            let cbor_a = minicbor::to_vec(a).unwrap();
-            let cbor_b = minicbor::to_vec(b).unwrap();
-            let cbor_c = minicbor::to_vec(c).unwrap();
+            let cbor_a = cbor_encode_preallocate(a).unwrap();
+            let cbor_b = cbor_encode_preallocate(b).unwrap();
+            let cbor_c = cbor_encode_preallocate(c).unwrap();
             assert!(minicbor::decode::<ResponseHeader>(&cbor_a).is_err());
             assert!(minicbor::decode::<Error>(&cbor_a).is_err());
             assert!(minicbor::decode::<RequestHeader>(&cbor_b).is_err());

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -7,20 +8,23 @@ use colorful::Colorful;
 use miette::{miette, IntoDiagnostic};
 use tracing::debug;
 
+use crate::shared_args::{IdentityOpts, RetryOpts, TrustOpts};
+use crate::util::parsers::{duration_parser, duration_to_human_format};
+use crate::{docs, Command, CommandGlobalOpts, Error, Result};
 use ockam::Context;
 use ockam_api::authenticator::direct::{
-    OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE, OCKAM_ROLE_ATTRIBUTE_KEY,
+    OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE, OCKAM_ROLE_ATTRIBUTE_KEY, OCKAM_TLS_ATTRIBUTE_KEY,
 };
-use ockam_api::authenticator::enrollment_tokens::TokenIssuer;
-use ockam_api::cli_state::enrollments::EnrollmentTicket;
+use ockam_api::authenticator::enrollment_tokens::{
+    TokenIssuer, DEFAULT_TOKEN_DURATION, DEFAULT_TOKEN_USAGE_COUNT, MAX_RECOMMENDED_TOKEN_DURATION,
+    MAX_RECOMMENDED_TOKEN_USAGE_COUNT,
+};
+use ockam_api::cli_state::{ExportedEnrollmentTicket, ProjectRoute};
 use ockam_api::colors::color_primary;
 use ockam_api::nodes::InMemoryNode;
-use ockam_api::{fmt_log, fmt_ok};
+use ockam_api::terminal::fmt;
+use ockam_api::{fmt_info, fmt_log, fmt_ok, fmt_warn};
 use ockam_multiaddr::MultiAddr;
-
-use crate::shared_args::{IdentityOpts, RetryOpts, TrustOpts};
-use crate::util::parsers::duration_parser;
-use crate::{docs, Command, CommandGlobalOpts, Error, Result};
 
 const LONG_ABOUT: &str = include_str!("./static/ticket/long_about.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/ticket/after_long_help.txt");
@@ -43,15 +47,10 @@ pub struct TicketCommand {
     #[command(flatten)]
     trust_opts: TrustOpts,
 
-    /// The Project name from this option is used to create the enrollment ticket. This takes precedence over `--project`
-    #[arg(long, short, value_name = "ROUTE_TO_PROJECT")]
-    to: Option<MultiAddr>,
-
     /// Attributes in `key=value` format to be attached to the member. You can specify this option multiple times for multiple attributes
     #[arg(short, long = "attribute", value_name = "ATTRIBUTE")]
     attributes: Vec<String>,
 
-    // Note: MAX_TOKEN_DURATION holds the default value.
     /// Duration for which the enrollment ticket is valid, if you don't specify this, the default is 10 minutes. Examples: 10000ms, 600s, 600, 10m, 1h, 1d. If you don't specify a length sigil, it is assumed to be seconds
     #[arg(long = "expires-in", value_name = "DURATION", value_parser = duration_parser)]
     expires_in: Option<Duration>,
@@ -68,68 +67,150 @@ pub struct TicketCommand {
     #[arg(long = "enroller")]
     enroller: bool,
 
+    /// Allows the access to the TLS certificate of the Project, this flag is transformed into the attributes `--attribute ockam-tls-certificate=true`
+    #[arg(long = "tls", hide = true)]
+    tls: bool,
+
     #[command(flatten)]
     retry_opts: RetryOpts,
+
+    /// Return the ticket in hex encoded format
+    #[arg(long = "hex", hide = true)]
+    hex_encoded: bool,
+
+    /// Return the ticket using the legacy encoding format
+    #[arg(long, hide = true)]
+    legacy: bool,
 }
 
 #[async_trait]
 impl Command for TicketCommand {
     const NAME: &'static str = "project ticket";
 
-    fn retry_opts(&self) -> Option<RetryOpts> {
-        Some(self.retry_opts.clone())
-    }
-
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> Result<()> {
-        if opts.global_args.output_format()?.is_json() {
-            return Err(miette::miette!(
-                "This command only outputs a hex encoded string for 'ockam project enroll' to use. \
-                Please try running it again without '--output json'."
-            )
-            .into());
-        }
-
-        let project = crate::project_member::get_project(&opts.state, &self.to).await?;
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> Result<()> {
+        let cmd = self.parse_args(&opts).await?;
+        let identity = opts
+            .state
+            .get_identity_name_or_default(&cmd.identity_opts.identity_name)
+            .await?;
 
         let node = InMemoryNode::start_with_project_name(
             ctx,
             &opts.state,
-            Some(project.name().to_string()),
+            cmd.trust_opts.project_name.clone(),
         )
         .await?;
 
-        let identity = opts
+        let project = opts
             .state
-            .get_identity_name_or_default(&self.identity_opts.identity_name)
+            .projects()
+            .get_project_by_name_or_default(&cmd.trust_opts.project_name)
             .await?;
 
         let authority_node_client = node
-            .create_authority_client(&project, Some(identity))
+            .create_authority_client_with_project(ctx, &project, Some(identity))
             .await?;
 
-        let attributes = self.attributes()?;
+        let attributes = cmd.attributes()?;
         debug!(attributes = ?attributes, "Attributes passed");
 
         // Request an enrollment token that a future member can use to get a
         // credential.
-        let token = authority_node_client
-            .create_token(ctx, attributes, self.expires_in, self.usage_count)
-            .await
-            .map_err(Error::Retry)?;
+        let token = {
+            let pb = opts.terminal.spinner();
+            if let Some(pb) = pb.as_ref() {
+                pb.set_message("Creating an enrollment ticket...");
+            }
+            authority_node_client
+                .create_token(ctx, attributes.clone(), cmd.expires_in, cmd.usage_count)
+                .await
+                .map_err(Error::Retry)?
+        };
+        let project = project.model();
+        let ticket = ExportedEnrollmentTicket::new(
+            token,
+            ProjectRoute::new(MultiAddr::from_str(&project.access_route)?)?,
+            project
+                .identity
+                .clone()
+                .ok_or(miette!("missing project's identity"))?,
+            &project.name,
+            project
+                .project_change_history
+                .as_ref()
+                .ok_or(miette!("missing project's change history"))?,
+            project
+                .authority_identity
+                .as_ref()
+                .ok_or(miette!("missing authority's change history"))?,
+            MultiAddr::from_str(
+                project
+                    .authority_access_route
+                    .as_ref()
+                    .ok_or(miette!("missing authority's route"))?,
+            )?,
+        )
+        .import()
+        .await?;
+        let (as_json, encoded_ticket) = if cmd.legacy {
+            let exported = ticket.export_legacy()?;
+            (
+                serde_json::to_string(&exported).into_diagnostic()?,
+                exported.hex_encoded()?,
+            )
+        } else {
+            let exported = ticket.export()?;
+            let encoded = if cmd.hex_encoded {
+                exported.hex_encoded()?
+            } else {
+                exported.to_string()
+            };
+            (serde_json::to_string(&exported).into_diagnostic()?, encoded)
+        };
 
-        let ticket = EnrollmentTicket::new(token, Some(project.model().clone()));
-        let ticket_serialized = ticket.hex_encoded().into_diagnostic()?;
-
-        opts.terminal
-            .write_line(fmt_ok!("Created enrollment ticket\n"))?;
-        opts.terminal.write_line(fmt_log!(
-            "You can use it to enroll another machine using: {}",
-            color_primary("ockam project enroll")
-        ))?;
+        let usage_count = cmd.usage_count.unwrap_or(DEFAULT_TOKEN_USAGE_COUNT);
+        let attributes_msg = if attributes.is_empty() {
+            "".to_string()
+        } else {
+            let mut attributes_msg =
+                fmt_log!("The redeemer will be assigned the following attributes:\n");
+            let mut attributes: Vec<_> = attributes.iter().collect();
+            attributes.sort();
+            for (key, value) in &attributes {
+                attributes_msg += &fmt_log!(
+                    "{}{}",
+                    fmt::INDENTATION,
+                    color_primary(format!("\"{key}={value}\"\n"))
+                );
+            }
+            attributes_msg += "\n";
+            attributes_msg
+        };
+        opts.terminal.write_line(
+            fmt_ok!("Created enrollment ticket\n\n")
+                + &attributes_msg
+                + &fmt_info!(
+                    "It will expire in {} and it can be used {}\n",
+                    color_primary(duration_to_human_format(
+                        &cmd.expires_in.unwrap_or(DEFAULT_TOKEN_DURATION)
+                    )),
+                    if usage_count == 1 {
+                        color_primary("once").to_string()
+                    } else {
+                        format!("up to {} times", color_primary(usage_count))
+                    }
+                )
+                + &fmt_log!(
+                    "You can use it to enroll another machine using: {}",
+                    color_primary("ockam project enroll")
+                ),
+        )?;
 
         opts.terminal
             .stdout()
-            .machine(ticket_serialized)
+            .plain(format!("\n{encoded_ticket}"))
+            .machine(encoded_ticket)
+            .json(as_json)
             .write_line()?;
 
         Ok(())
@@ -137,6 +218,29 @@ impl Command for TicketCommand {
 }
 
 impl TicketCommand {
+    async fn parse_args(self, opts: &CommandGlobalOpts) -> miette::Result<Self> {
+        // Handle expires_in and usage_count limits
+        if let Some(usage_count) = self.usage_count {
+            if usage_count < 1 {
+                return Err(miette!("The usage count must be at least 1"));
+            }
+        }
+        if let (Some(expires_in), Some(usage_count)) = (self.expires_in, self.usage_count) {
+            if expires_in >= MAX_RECOMMENDED_TOKEN_DURATION
+                && usage_count >= MAX_RECOMMENDED_TOKEN_USAGE_COUNT
+            {
+                opts.terminal.write_line(
+                    fmt_warn!(
+                        "You are creating a ticket with a long expiration time and a high usage count\n"
+                    ) + &fmt_log!(
+                        "This is a security risk. Please consider reducing the values according to the ticket's intended use\n"
+                    ),
+                )?;
+            }
+        }
+        Ok(self)
+    }
+
     fn attributes(&self) -> Result<BTreeMap<String, String>> {
         let mut attributes = BTreeMap::new();
         for attr in &self.attributes {
@@ -155,6 +259,11 @@ impl TicketCommand {
                 OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE.to_string(),
             );
         }
+
+        if self.tls {
+            attributes.insert(OCKAM_TLS_ATTRIBUTE_KEY.to_string(), "true".to_string());
+        }
+
         Ok(attributes)
     }
 }

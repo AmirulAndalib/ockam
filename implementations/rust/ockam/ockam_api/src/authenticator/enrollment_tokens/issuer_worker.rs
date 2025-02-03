@@ -2,11 +2,11 @@ use either::Either;
 use minicbor::Decoder;
 use tracing::trace;
 
-use ockam::identity::{IdentitiesAttributes, IdentitySecureChannelLocalInfo};
+use ockam::identity::{Identifier, IdentitiesAttributes};
 use ockam_core::api::{Method, RequestHeader, Response};
 use ockam_core::compat::sync::Arc;
 use ockam_core::compat::time::Duration;
-use ockam_core::{Result, Routed, Worker};
+use ockam_core::{Result, Routed, SecureChannelLocalInfo, Worker};
 use ockam_node::Context;
 
 use crate::authenticator::direct::types::CreateToken;
@@ -20,6 +20,7 @@ pub struct EnrollmentTokenIssuerWorker {
 
 impl EnrollmentTokenIssuerWorker {
     pub fn new(
+        authority: &Identifier,
         tokens: Arc<dyn AuthorityEnrollmentTokenRepository>,
         members: Arc<dyn AuthorityMembersRepository>,
         identities_attributes: Arc<IdentitiesAttributes>,
@@ -27,6 +28,7 @@ impl EnrollmentTokenIssuerWorker {
     ) -> Self {
         Self {
             issuer: EnrollmentTokenIssuer::new(
+                authority,
                 tokens,
                 members,
                 identities_attributes,
@@ -42,18 +44,17 @@ impl Worker for EnrollmentTokenIssuerWorker {
     type Message = Vec<u8>;
 
     async fn handle_message(&mut self, c: &mut Context, m: Routed<Self::Message>) -> Result<()> {
-        let secure_channel_info = match IdentitySecureChannelLocalInfo::find_info(m.local_message())
-        {
+        let secure_channel_info = match SecureChannelLocalInfo::find_info(m.local_message()) {
             Ok(secure_channel_info) => secure_channel_info,
             Err(_e) => {
                 let resp = Response::bad_request_no_request("secure channel required").to_vec()?;
-                c.send(m.return_route(), resp).await?;
+                c.send(m.return_route().clone(), resp).await?;
                 return Ok(());
             }
         };
 
-        let from = secure_channel_info.their_identity_id();
-        let return_route = m.return_route();
+        let from = Identifier::from(secure_channel_info.their_identifier());
+        let return_route = m.return_route().clone();
         let body = m.into_body()?;
         let mut dec = Decoder::new(&body);
         let req: RequestHeader = dec.decode()?;

@@ -1,12 +1,12 @@
 use clap::Args;
 use colorful::Colorful;
-use miette::{miette, IntoDiagnostic, WrapErr};
+use miette::{miette, WrapErr};
 use serde_json::json;
 use tokio::{sync::Mutex, try_join};
 
 use crate::{docs, CommandGlobalOpts};
+use ockam::identity::get_default_timeout;
 use ockam::identity::models::CredentialAndPurposeKey;
-use ockam::identity::DEFAULT_TIMEOUT;
 use ockam::{identity::Identifier, route, Context};
 use ockam_api::address::extract_address_value;
 use ockam_api::colors::OckamColor;
@@ -14,7 +14,7 @@ use ockam_api::nodes::models::secure_channel::{
     CreateSecureChannelRequest, CreateSecureChannelResponse,
 };
 use ockam_api::nodes::BackgroundNodeClient;
-use ockam_api::{fmt_log, fmt_ok, route_to_multiaddr};
+use ockam_api::{fmt_log, fmt_ok, ReverseLocalConverter};
 use ockam_core::api::Request;
 use ockam_multiaddr::MultiAddr;
 
@@ -23,7 +23,7 @@ use crate::project::util::{
     clean_projects_multiaddr, get_projects_secure_channels_from_config_lookup,
 };
 use crate::shared_args::IdentityOpts;
-use crate::util::{async_cmd, clean_nodes_multiaddr, exitcode};
+use crate::util::{clean_nodes_multiaddr, exitcode};
 
 const LONG_ABOUT: &str = include_str!("./static/create/long_about.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/create/after_long_help.txt");
@@ -61,12 +61,6 @@ pub struct CreateCommand {
 }
 
 impl CreateCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "secure-channel create".into()
     }
@@ -93,20 +87,18 @@ impl CreateCommand {
             node,
             &meta,
             Some(identity_name),
-            Some(DEFAULT_TIMEOUT),
+            Some(get_default_timeout()),
         )
         .await?;
-        clean_projects_multiaddr(to, projects_sc)
-            .into_diagnostic()
-            .wrap_err("Could not parse projects from route")
+        clean_projects_multiaddr(to, projects_sc).wrap_err("Could not parse projects from route")
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         initialize_default_node(ctx, &opts).await?;
-        let node = BackgroundNodeClient::create_to_node(ctx, &opts.state, &self.from).await?;
+        let node = BackgroundNodeClient::create_to_node(ctx, &opts.state, &self.from)?;
 
         opts.terminal
-            .write_line(&fmt_log!("Creating Secure Channel...\n"))?;
+            .write_line(fmt_log!("Creating Secure Channel...\n"))?;
 
         // Delegate the request to create a secure channel to the from node.
         let is_finished: Mutex<bool> = Mutex::new(false);
@@ -147,7 +139,7 @@ impl CreateCommand {
         let (secure_channel, _) = try_join!(create_secure_channel, progress_output)?;
 
         let route = &route![secure_channel.to_string()];
-        let multi_addr = route_to_multiaddr(route).ok_or_else(|| {
+        let multi_addr = ReverseLocalConverter::convert_route(route).map_err(|_| {
             crate::Error::new(
                 exitcode::PROTOCOL,
                 miette!("Failed to convert route {route} to multi-address"),

@@ -1,10 +1,10 @@
+use crate::nodes::InMemoryNode;
+use crate::orchestrator::email_address::EmailAddress;
+use crate::orchestrator::project::models::{AdminInfo, OrchestratorVersionInfo};
+use crate::orchestrator::project::{Project, ProjectsOrchestratorApi};
 use miette::IntoDiagnostic;
 use ockam_core::async_trait;
 use ockam_node::Context;
-
-use crate::cloud::project::models::OrchestratorVersionInfo;
-use crate::cloud::project::{Project, ProjectsOrchestratorApi};
-use crate::nodes::InMemoryNode;
 
 #[async_trait]
 impl ProjectsOrchestratorApi for InMemoryNode {
@@ -41,7 +41,7 @@ impl ProjectsOrchestratorApi for InMemoryNode {
                 .import_and_store_project(project.clone())
                 .await?),
             Err(e) => {
-                warn!("could no get the project {project_id} from the controller: {e:?}");
+                warn!("could no get the project {project_id} from the controller: {e}");
                 Ok(self.cli_state.projects().get_project(project_id).await?)
             }
         }
@@ -132,21 +132,14 @@ impl ProjectsOrchestratorApi for InMemoryNode {
         // Try to refresh the list of projects with the controller
         match self.create_controller().await?.list_projects(ctx).await {
             Ok(project_models) => {
-                for project_model in &project_models {
+                for project_model in project_models {
                     info!(
                         "retrieved project {}/{}",
                         project_model.name, project_model.id
                     );
-                    let mut project = Project::import(project_model.clone())
+                    let project = Project::import(project_model.clone())
                         .await
                         .into_diagnostic()?;
-                    // If the project has no admin role, the name is set to the project id
-                    // to avoid collisions with other projects with the same name that
-                    // belong to other spaces.
-                    // FIXME
-                    if !project.is_admin(&user) {
-                        project.override_name(project.project_id().to_string());
-                    }
                     self.cli_state.projects().store_project(project).await?;
                 }
             }
@@ -193,17 +186,44 @@ impl ProjectsOrchestratorApi for InMemoryNode {
         ctx: &Context,
         project: Project,
     ) -> miette::Result<Project> {
-        let project = self
-            .create_controller()
-            .await?
-            .wait_until_project_is_ready(ctx, project.model())
+        self.node_manager
+            .wait_until_project_is_ready(ctx, &project)
+            .await
+    }
+
+    async fn add_project_admin(
+        &self,
+        ctx: &Context,
+        project_id: &str,
+        email: &EmailAddress,
+    ) -> miette::Result<AdminInfo> {
+        let controller = self.create_controller().await?;
+        let res = controller.add_project_admin(ctx, project_id, email).await?;
+        self.get_project(ctx, project_id).await?;
+        Ok(res)
+    }
+
+    async fn list_project_admins(
+        &self,
+        ctx: &Context,
+        project_id: &str,
+    ) -> miette::Result<Vec<AdminInfo>> {
+        let controller = self.create_controller().await?;
+        controller.list_project_admins(ctx, project_id).await
+    }
+
+    async fn delete_project_admin(
+        &self,
+        ctx: &Context,
+        project_id: &str,
+        email: &EmailAddress,
+    ) -> miette::Result<()> {
+        let controller = self.create_controller().await?;
+        controller
+            .delete_project_admin(ctx, project_id, email)
             .await?;
-        let project = self
-            .cli_state
-            .projects()
-            .import_and_store_project(project.clone())
-            .await?;
-        Ok(project)
+        self.get_project(ctx, project_id).await?;
+        Ok(())
     }
 }
 
@@ -211,7 +231,7 @@ impl ProjectsOrchestratorApi for InMemoryNode {
 mod tests {
     use crate::cli_state::projects::Projects;
     use crate::cli_state::ProjectsSqlxDatabase;
-    use crate::cloud::project::models::ProjectModel;
+    use crate::orchestrator::project::models::ProjectModel;
     use ockam::identity::{
         identities, ChangeHistoryRepository, ChangeHistorySqlxDatabase, IdentitiesVerification,
     };

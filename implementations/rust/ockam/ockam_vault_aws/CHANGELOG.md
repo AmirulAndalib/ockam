@@ -4,6 +4,114 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.56.0 - 2025-01-20
+
+### Added
+
+- Updated dependencies
+
+## 0.55.0 - 2025-01-09
+
+### Added
+
+- Updated dependencies
+
+## 0.54.0 - 2024-12-12
+
+### Added
+
+- Updated dependencies
+
+## 0.53.0 - 2024-12-04
+
+### Added
+
+- Updated dependencies
+
+## 0.52.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.51.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.50.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.49.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.48.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.47.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.46.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.45.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.44.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.43.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.42.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.41.0 - 2024-07-29
+
+### Added
+
+- Updated dependencies
+
+## 0.40.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+## 0.39.0 - 2024-07-01
+
+### Added
+
+- Updated dependencies
+
 ## 0.38.0 - 2024-06-25
 
 ### Added

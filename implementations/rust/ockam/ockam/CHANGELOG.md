@@ -4,6 +4,140 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.147.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Let relay service overwrite relays
+- Updated dependencies
+
+## 0.146.0 - 2025-01-09
+
+### Added
+
+- Improvements to portals commands arguments
+- Updated dependencies
+
+## 0.145.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Updated dependencies
+
+## 0.144.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.143.0 - 2024-11-30
+
+### Added
+
+- Updated dependencies
+
+## 0.142.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.141.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.140.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.139.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.138.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.137.0 - 2024-10-21
+
+### Added
+
+- Improvements to commands outputs
+- Updated dependencies
+
+## 0.136.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.135.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.134.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.133.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.132.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.131.0 - 2024-08-06
+
+### Added
+
+- Finish removing heartbeats from `RemoteRelay`
+- `UDP` puncture improvements
+- Updated dependencies
+
+## 0.130.0 - 2024-07-29
+
+### Added
+
+- Improve transport imports
+- Expose `RendezvousService` from ockam
+- Move rendezvous_server to `ockam rendezvous-server start`
+- Converted socket addresses to hostnames in command
+- Remove sync operations
+- Updated dependencies
+
+## 0.129.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+## 0.128.0 - 2024-07-01
+
+### Added
+
+- Improve transport imports
+- Updated dependencies
+
 ## 0.127.0 - 2024-06-25
 
 ### Added

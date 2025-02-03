@@ -15,26 +15,32 @@ teardown() {
 # ===== TESTS
 
 @test "authority - an authority node must be shown as UP even if its tcp listener cannot be accessed" {
-  run_success "$OCKAM" identity create authority
-  authority_identity_full=$($OCKAM identity show --full --encoding hex authority)
-  trusted="{}"
   port="$(random_port)"
-  run_success "$OCKAM" authority create --tcp-listener-address="127.0.0.1:$port" --project-identifier 1 --trusted-identities "$trusted"
-  run_success "$OCKAM" node show authority
-  assert_output --partial "\"status\":\"running\""
+  run_success "$OCKAM" authority create --tcp-listener-address="127.0.0.1:$port" --project-identifier 1 --trusted-identities "{}"
+  sleep 1
+
+  # the name of the node is authority-{project-identifier}
+  run_success "$OCKAM" node show authority-1
+  assert_output --partial "\"status\": \"running\""
 }
 
 @test "authority - an authority identity is created by default for the authority node" {
   port="$(random_port)"
   trusted="{}"
   run_success "$OCKAM" authority create --tcp-listener-address="127.0.0.1:$port" --project-identifier 1 --trusted-identities "$trusted"
-  run_success "$OCKAM" identity show authority
+  sleep 1
+
+  # the name of the authority identity is authority-{project-identifier}
+  run_success "$OCKAM" identity show authority-1
 }
 
 @test "authority - an authority identity is created by default for the authority node - with a given name" {
   port="$(random_port)"
   trusted="{}"
   run_success "$OCKAM" authority create --tcp-listener-address="127.0.0.1:$port" --project-identifier 1 --trusted-identities "$trusted" --identity ockam
+  sleep 1
+
+  # the name of the authority identity is untouched
   run_success "$OCKAM" identity show ockam
 }
 
@@ -45,14 +51,14 @@ teardown() {
   run "$OCKAM" identity create account_authority
 
   run "$OCKAM" identity create admin
-  # m1 will be pre-enrolled on authority.  m2 will be added directly, m3 will be added through enrollment token
-  # m4 and m5 will be added by a shared enrollment token, m6 won't be added
+  # m1 will be pre-enrolled on authority.  m2 will be added directly, m3 will be added through enrollment ticket
+  # m4 and m5 will be added by a shared enrollment ticket, m6 won't be added
   run "$OCKAM" identity create m1
   run "$OCKAM" identity create m2
   run "$OCKAM" identity create m3
   run "$OCKAM" identity create m4
   run "$OCKAM" identity create m5
-  run "$OCKAM" identity create m7
+  run "$OCKAM" identity create m6
 
   account_authority_full=$($OCKAM identity show account_authority --full --encoding hex)
   account_authority_identifier=$($OCKAM identity show account_authority)
@@ -75,7 +81,7 @@ teardown() {
   sleep 2 # wait for authority to start TCP listener
 
   # Make the admin present its project admin credential to the authority
-  run_success "$OCKAM" secure-channel create --from admin --to "/node/authority/service/api" --identity admin --credential $admin_cred
+  run_success "$OCKAM" secure-channel create --from admin --to "/node/authority-1/service/api" --identity admin --credential $admin_cred
 
   cat <<EOF >"$OCKAM_HOME/project.json"
 {
@@ -85,7 +91,8 @@ teardown() {
   "access_route": "/dnsaddr/127.0.0.1/tcp/4000/service/api",
   "users": [],
   "space_id": "1",
-  "identity": "I6c20e814b56579306f55c64e8747e6c1b4a53d9aa1b2c3d4e5f6a6b5c4d3e2f1",
+  "identity": "I923829d0397a06fa862be5a87b7966959b8ef99ab6455b843ca9131a747b4819",
+  "project_change_history": "81825837830101583285f68200815820f405e06d988fa8039cce1cd0ae607e46847c1b64bc459ca9d89dd9b21ae30681f41a654cebe91a7818eee98200815840494c9b70e8a9ad5593fceb478f722a513b4bd39fa70f4265d584253bc24617d0eb498ce532273f6d0d5326921e013696fce57c20cc6c4008f74b816810f0b009",
   "authority_access_route": "/dnsaddr/127.0.0.1/tcp/$port/service/api",
   "authority_identity": "$authority_identity_full",
   "version": "605c4632ded93eb17edeeef31fa3860db225b3ab-2023-12-05",
@@ -98,7 +105,7 @@ EOF
   run_success $OCKAM project import --project-file $OCKAM_HOME/project.json
 
   run_success "$OCKAM" project enroll --identity admin
-  assert_output --partial "ockam-relay=*"
+  assert_output --partial "\"ockam-relay\": \"*\""
   assert_output --partial "admin"
 
   # m1 is a member (its on the set of pre-trusted identifiers) so it can get it's own credential
@@ -120,14 +127,14 @@ EOF
 
   # admin can enroll new enrollers
   token3=$($OCKAM project ticket --identity admin --enroller)
-  run_success "$OCKAM" project enroll $token3 --identity m7
+  run_success "$OCKAM" project enroll $token3 --identity m6
   assert_output --partial "enroller"
 
   # New enroller can enroll members
-  run_success "$OCKAM" project ticket --identity m7
+  run_success "$OCKAM" project ticket --identity m6
 
   # Enroller can't enroll new enrollers
-  run "$OCKAM" project ticket --enroller --identity m7
+  run "$OCKAM" project ticket --enroller --identity m6
   assert_failure
 
   run "$OCKAM" project enroll $token2 --identity m5
@@ -137,7 +144,7 @@ EOF
 @test "authority - enrollment ticket ttl" {
   run "$OCKAM" identity create authority
   run "$OCKAM" identity create enroller
-  #m3 will be added through enrollment token
+  #m3 will be added through enrollment ticket
   run "$OCKAM" identity create m3
 
   enroller_identifier=$($OCKAM identity show enroller)
@@ -157,7 +164,8 @@ EOF
   "access_route": "/dnsaddr/127.0.0.1/tcp/4000/service/api",
   "users": [],
   "space_id": "1",
-  "identity": "I6c20e814b56579306f55c64e8747e6c1b4a53d9aa1b2c3d4e5f6a6b5c4d3e2f1",
+  "identity": "I923829d0397a06fa862be5a87b7966959b8ef99ab6455b843ca9131a747b4819",
+  "project_change_history": "81825837830101583285f68200815820f405e06d988fa8039cce1cd0ae607e46847c1b64bc459ca9d89dd9b21ae30681f41a654cebe91a7818eee98200815840494c9b70e8a9ad5593fceb478f722a513b4bd39fa70f4265d584253bc24617d0eb498ce532273f6d0d5326921e013696fce57c20cc6c4008f74b816810f0b009",
   "authority_access_route": "/dnsaddr/127.0.0.1/tcp/$port/service/api",
   "authority_identity": "$authority_identity_full",
   "version": "605c4632ded93eb17edeeef31fa3860db225b3ab-2023-12-05",
@@ -170,14 +178,14 @@ EOF
   run_success bash -c "$OCKAM project import --project-file $OCKAM_HOME/project.json"
 
   # Enrollment ticket expired by the time it's used
-  token=$($OCKAM project ticket --identity enroller --attribute sample_attr=m3_member --expires-in 1s)
+  ticket=$($OCKAM project ticket --identity enroller --attribute sample_attr=m3_member --expires-in 1s)
   sleep 2
-  run "$OCKAM" project enroll $token --identity m3
+  run "$OCKAM" project enroll $ticket --identity m3
   assert_failure
 
   # Enrollment ticket with enough ttl
-  token=$($OCKAM project ticket --identity enroller --attribute sample_attr=m3_member --expires-in 30s)
-  run_success "$OCKAM" project enroll $token --identity m3
+  ticket=$($OCKAM project ticket --identity enroller --attribute sample_attr=m3_member --expires-in 30s)
+  run_success "$OCKAM" project enroll $ticket --identity m3
   assert_output --partial "m3_member"
 }
 
@@ -215,7 +223,8 @@ EOF
   "access_route": "/dnsaddr/127.0.0.1/tcp/4000/service/api",
   "users": [],
   "space_id": "1",
-  "identity": "I6c20e814b56579306f55c64e8747e6c1b4a53d9aa1b2c3d4e5f6a6b5c4d3e2f1",
+  "identity": "I923829d0397a06fa862be5a87b7966959b8ef99ab6455b843ca9131a747b4819",
+  "project_change_history": "81825837830101583285f68200815820f405e06d988fa8039cce1cd0ae607e46847c1b64bc459ca9d89dd9b21ae30681f41a654cebe91a7818eee98200815840494c9b70e8a9ad5593fceb478f722a513b4bd39fa70f4265d584253bc24617d0eb498ce532273f6d0d5326921e013696fce57c20cc6c4008f74b816810f0b009",
   "authority_access_route": "/dnsaddr/127.0.0.1/tcp/$port/service/api",
   "authority_identity": "$authority_identity_full",
   "version": "605c4632ded93eb17edeeef31fa3860db225b3ab-2023-12-05",
@@ -250,7 +259,7 @@ EOF
   m_identifier=$($OCKAM identity show m)
 
   # Start the authority node.  We pass a set of pre trusted-identities containing m1' identity identifier
-  # For the first test we start the node with no direct authentication service nor token enrollment
+  # For the first test we start the node with no direct authentication service nor ticket enrollment
   trusted="{\"$enroller_identifier\": {\"ockam-role\": \"enroller\"}}"
   port="$(random_port)"
   run_success "$OCKAM" authority create --tcp-listener-address="127.0.0.1:$port" --project-identifier 1 --trusted-identities "$trusted"
@@ -264,7 +273,8 @@ EOF
   "access_route": "/dnsaddr/127.0.0.1/tcp/4000/service/api",
   "users": [],
   "space_id": "1",
-  "identity": "I6c20e814b56579306f55c64e8747e6c1b4a53d9aa1b2c3d4e5f6a6b5c4d3e2f1",
+  "identity": "I923829d0397a06fa862be5a87b7966959b8ef99ab6455b843ca9131a747b4819",
+  "project_change_history": "81825837830101583285f68200815820f405e06d988fa8039cce1cd0ae607e46847c1b64bc459ca9d89dd9b21ae30681f41a654cebe91a7818eee98200815840494c9b70e8a9ad5593fceb478f722a513b4bd39fa70f4265d584253bc24617d0eb498ce532273f6d0d5326921e013696fce57c20cc6c4008f74b816810f0b009",
   "authority_access_route": "/dnsaddr/127.0.0.1/tcp/$port/service/api",
   "authority_identity": "$authority_identity_full",
   "version": "605c4632ded93eb17edeeef31fa3860db225b3ab-2023-12-05",
@@ -281,8 +291,8 @@ EOF
 
   run_success "$OCKAM" project-member list --identity enroller
   assert_output --partial "$enroller_identifier"
-  assert_output --partial "\"ockam-role\":\"enroller\""
-  assert_output --partial "\"attested_by\":\"$authority_identifier\""
+  assert_output --partial "\"ockam-role\": \"enroller\""
+  assert_output --partial "\"attested_by\": \"$authority_identifier\""
 
   run_success "$OCKAM" project-member add "$m_identifier" --identity enroller --attribute key=value --relay="*"
 
@@ -291,20 +301,20 @@ EOF
   assert_output --partial "$m_identifier"
 
   run_success "$OCKAM" project-member list --identity enroller
-  assert_output --partial "\"identifier\":\"$enroller_identifier\""
-  assert_output --partial "\"ockam-role\":\"enroller\""
-  assert_output --partial "\"attested_by\":\"$authority_identifier\""
+  assert_output --partial "\"identifier\": \"$enroller_identifier\""
+  assert_output --partial "\"ockam-role\": \"enroller\""
+  assert_output --partial "\"attested_by\": \"$authority_identifier\""
 
-  assert_output --partial "\"identifier\":\"$m_identifier\""
-  assert_output --partial "\"key\":\"value\""
-  assert_output --partial "\"ockam-relay\":\"*\""
-  assert_output --partial "\"attested_by\":\"$enroller_identifier\""
+  assert_output --partial "\"identifier\": \"$m_identifier\""
+  assert_output --partial "\"key\": \"value\""
+  assert_output --partial "\"ockam-relay\": \"*\""
+  assert_output --partial "\"attested_by\": \"$enroller_identifier\""
 
   run_success "$OCKAM" project-member show "$m_identifier" --identity enroller
-  assert_output --partial "\"identifier\":\"$m_identifier\""
-  assert_output --partial "\"key\":\"value\""
-  assert_output --partial "\"ockam-relay\":\"*\""
-  assert_output --partial "\"attested_by\":\"$enroller_identifier\""
+  assert_output --partial "\"identifier\": \"$m_identifier\""
+  assert_output --partial "\"key\": \"value\""
+  assert_output --partial "\"ockam-relay\": \"*\""
+  assert_output --partial "\"attested_by\": \"$enroller_identifier\""
 
   run_success "$OCKAM" project-member delete "$m_identifier" --identity enroller
 }

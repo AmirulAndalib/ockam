@@ -4,6 +4,127 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.78.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.77.0 - 2025-01-09
+
+### Added
+
+- Updated dependencies
+
+## 0.76.0 - 2024-12-12
+
+### Added
+
+- Extend boolean expressions to allow key-value and identifiers
+- Updated dependencies
+
+### Changed
+
+- Make the auto-retry an implementation detail of repositories
+
+## 0.75.0 - 2024-12-04
+
+### Added
+
+- Updated dependencies
+
+## 0.74.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.73.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.72.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.71.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.70.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.69.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.68.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.67.0 - 2024-09-23
+
+### Added
+
+- Implement influxdb token lessor service
+- Updated dependencies
+
+## 0.66.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.65.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.64.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.63.0 - 2024-07-29
+
+### Added
+
+- Updated dependencies
+
+## 0.62.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Use a published dependency for the patched sqlx library
+
+## 0.61.0 - 2024-07-01
+
+### Added
+
+- Use the any driver for sqlx to add support for postgres
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
 ## 0.60.0 - 2024-06-25
 
 ### Added

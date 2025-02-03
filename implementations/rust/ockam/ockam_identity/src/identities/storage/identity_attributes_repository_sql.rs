@@ -1,16 +1,17 @@
 use core::str::FromStr;
-
-use sqlx::database::HasArguments;
 use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
 use sqlx::*;
+use sqlx_core::any::AnyArgumentBuffer;
+use std::sync::Arc;
 use tracing::debug;
-
-use ockam_core::async_trait;
-use ockam_core::Result;
-use ockam_node::database::{FromSqlxError, Nullable, SqlxDatabase, ToVoid};
 
 use crate::models::Identifier;
 use crate::{AttributesEntry, IdentityAttributesRepository, TimestampInSeconds};
+use ockam_core::async_trait;
+use ockam_core::Result;
+use ockam_node::database::AutoRetry;
+use ockam_node::database::{FromSqlxError, Nullable, SqlxDatabase, ToVoid};
 
 /// Implementation of [`IdentityAttributesRepository`] trait based on an underlying database
 /// using sqlx as its API, and Sqlite as its driver
@@ -27,6 +28,18 @@ impl IdentityAttributesSqlxDatabase {
         Self {
             database,
             node_name: node_name.to_string(),
+        }
+    }
+
+    /// Create a repository
+    pub fn make_repository(
+        database: SqlxDatabase,
+        node_name: &str,
+    ) -> Arc<dyn IdentityAttributesRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database, node_name)))
+        } else {
+            Arc::new(Self::new(database, node_name))
         }
     }
 
@@ -93,8 +106,11 @@ impl Type<Any> for AttributesEntry {
 }
 
 impl Encode<'_, Any> for AttributesEntry {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
-        <Vec<u8> as Encode<'_, Any>>::encode_by_ref(&minicbor::to_vec(self.attrs()).unwrap(), buf)
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        <Vec<u8> as Encode<'_, Any>>::encode_by_ref(
+            &ockam_core::cbor_encode_preallocate(self.attrs()).unwrap(),
+            buf,
+        )
     }
 }
 

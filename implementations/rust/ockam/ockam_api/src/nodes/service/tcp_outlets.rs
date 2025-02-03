@@ -27,6 +27,7 @@ impl NodeManagerWorker {
             reachable_from_default_secure_channel,
             policy_expression,
             tls,
+            privileged,
         } = create_outlet;
 
         match self
@@ -38,6 +39,7 @@ impl NodeManagerWorker {
                 worker_addr,
                 reachable_from_default_secure_channel,
                 OutletAccessControl::WithPolicyExpression(policy_expression),
+                privileged,
             )
             .await
         {
@@ -53,9 +55,10 @@ impl NodeManagerWorker {
         match self.node_manager.delete_outlet(worker_addr).await {
             Ok(res) => match res {
                 Some(outlet_info) => Ok(Response::ok().body(OutletStatus::new(
-                    outlet_info.socket_addr,
+                    outlet_info.to,
                     outlet_info.worker_addr.clone(),
                     None,
+                    outlet_info.privileged,
                 ))),
                 None => Err(Response::bad_request_no_request(&format!(
                     "Outlet with address {worker_addr} not found"
@@ -65,11 +68,11 @@ impl NodeManagerWorker {
         }
     }
 
-    pub(super) async fn show_outlet(
+    pub(super) fn show_outlet(
         &self,
         worker_addr: &Address,
     ) -> Result<Response<OutletStatus>, Response<Error>> {
-        match self.node_manager.show_outlet(worker_addr).await {
+        match self.node_manager.show_outlet(worker_addr) {
             Some(outlet) => Ok(Response::ok().body(outlet)),
             None => Err(Response::not_found_no_request(&format!(
                 "Outlet with address {worker_addr} not found"
@@ -77,41 +80,32 @@ impl NodeManagerWorker {
         }
     }
 
-    pub(super) async fn get_outlets(&self, req: &RequestHeader) -> Response<Vec<OutletStatus>> {
+    pub(super) fn get_outlets(&self, req: &RequestHeader) -> Response<Vec<OutletStatus>> {
         Response::ok()
             .with_headers(req)
-            .body(self.node_manager.list_outlets().await)
+            .body(self.node_manager.list_outlets())
     }
 }
 
 impl NodeManager {
-    #[instrument(skip(self, ctx))]
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn create_outlet(
         &self,
         ctx: &Context,
-        hostname_port: HostnamePort,
+        to: HostnamePort,
         tls: bool,
         worker_addr: Option<Address>,
         reachable_from_default_secure_channel: bool,
         access_control: OutletAccessControl,
+        privileged: bool,
     ) -> Result<OutletStatus> {
-        let worker_addr = self
-            .registry
-            .outlets
-            .generate_worker_addr(worker_addr)
-            .await;
+        let worker_addr = self.registry.outlets.generate_worker_addr(worker_addr);
 
-        info!(
-            "Handling request to create outlet portal at {}:{} with worker {:?}",
-            &hostname_port.hostname(),
-            hostname_port.port(),
-            worker_addr
-        );
+        debug!(%to, address = %worker_addr, "creating outlet");
 
         // Check registry for a duplicated key
-        if self.registry.outlets.contains_key(&worker_addr).await {
+        if self.registry.outlets.contains_key(&worker_addr) {
             let message = format!("A TCP outlet with address '{worker_addr}' already exists");
             return Err(ockam_core::Error::new(
                 Origin::Node,
@@ -137,14 +131,14 @@ impl NodeManager {
         };
 
         let options = {
-            let options = TcpOutletOptions::new()
+            let mut options = TcpOutletOptions::new()
                 .with_incoming_access_control(incoming_ac)
                 .with_outgoing_access_control(outgoing_ac)
                 .with_tls(tls);
-            let options = if self.project_authority().is_none() {
-                options.as_consumer(&self.api_transport_flow_control_id)
-            } else {
-                options
+            if self.project_authority().is_none() {
+                for api_transport_flow_control_id in &self.api_transport_flow_control_ids {
+                    options = options.as_consumer(api_transport_flow_control_id)
+                }
             };
             if reachable_from_default_secure_channel {
                 // Accept messages from the default secure channel listener
@@ -152,38 +146,49 @@ impl NodeManager {
                     .flow_controls()
                     .get_flow_control_with_spawner(&DefaultAddress::SECURE_CHANNEL_LISTENER.into())
                 {
-                    options.as_consumer(&flow_control_id)
-                } else {
-                    options
+                    options = options.as_consumer(&flow_control_id)
                 }
-            } else {
-                options
             }
+
+            options
         };
 
-        let socket_addr = hostname_port.to_socket_addr()?;
-        let res = self
-            .tcp_transport
-            .create_tcp_outlet(worker_addr.clone(), hostname_port, options)
-            .await;
+        let res = if privileged {
+            #[cfg(privileged_portals_support)]
+            {
+                self.tcp_transport
+                    .create_privileged_outlet(worker_addr.clone(), to.clone(), options)
+                    .await
+            }
+            #[cfg(not(privileged_portals_support))]
+            {
+                Err(ockam_core::Error::new(
+                    Origin::Node,
+                    Kind::Internal,
+                    "Privileged Portals support is not enabled",
+                ))
+            }
+        } else {
+            self.tcp_transport
+                .create_outlet(worker_addr.clone(), to.clone(), options)
+        };
 
         Ok(match res {
             Ok(_) => {
                 // TODO: Use better way to store outlets?
-                self.registry
-                    .outlets
-                    .insert(
-                        worker_addr.clone(),
-                        OutletInfo::new(&socket_addr, Some(&worker_addr)),
-                    )
-                    .await;
-
-                self.cli_state
-                    .create_tcp_outlet(&self.node_name, &socket_addr, &worker_addr, &None)
-                    .await?
+                self.registry.outlets.insert(
+                    worker_addr.clone(),
+                    OutletInfo::new(to.clone(), Some(&worker_addr), privileged),
+                );
+                let outlet = self
+                    .cli_state
+                    .create_tcp_outlet(&self.node_name, &to, &worker_addr, &None, privileged)
+                    .await?;
+                info!(%to, address = %worker_addr, "outlet created");
+                outlet
             }
             Err(e) => {
-                warn!(at = %socket_addr, err = %e, "Failed to create TCP outlet");
+                warn!(at = %to, err = %e, "Failed to create TCP outlet");
                 let message = format!("Failed to create outlet: {}", e);
                 return Err(ockam_core::Error::new(
                     Origin::Node,
@@ -196,7 +201,7 @@ impl NodeManager {
 
     pub async fn delete_outlet(&self, worker_addr: &Address) -> Result<Option<OutletInfo>> {
         info!(%worker_addr, "Handling request to delete outlet portal");
-        if let Some(deleted_outlet) = self.registry.outlets.remove(worker_addr).await {
+        if let Some(deleted_outlet) = self.registry.outlets.remove(worker_addr) {
             debug!(%worker_addr, "Successfully removed outlet from node registry");
 
             self.cli_state
@@ -206,11 +211,7 @@ impl NodeManager {
                 .delete_resource(&worker_addr.address().into())
                 .await?;
 
-            if let Err(e) = self
-                .tcp_transport
-                .stop_outlet(deleted_outlet.worker_addr.clone())
-                .await
-            {
+            if let Err(e) = self.tcp_transport.stop_outlet(&deleted_outlet.worker_addr) {
                 warn!(%worker_addr, %e, "Failed to stop outlet worker");
             }
             trace!(%worker_addr, "Successfully stopped outlet");
@@ -221,14 +222,15 @@ impl NodeManager {
         }
     }
 
-    pub(super) async fn show_outlet(&self, worker_addr: &Address) -> Option<OutletStatus> {
+    pub(super) fn show_outlet(&self, worker_addr: &Address) -> Option<OutletStatus> {
         info!(%worker_addr, "Handling request to show outlet portal");
-        if let Some(outlet_to_show) = self.registry.outlets.get(worker_addr).await {
+        if let Some(outlet_to_show) = self.registry.outlets.get(worker_addr) {
             debug!(%worker_addr, "Outlet not found in node registry");
             Some(OutletStatus::new(
-                outlet_to_show.socket_addr,
+                outlet_to_show.to,
                 outlet_to_show.worker_addr.clone(),
                 None,
+                outlet_to_show.privileged,
             ))
         } else {
             error!(%worker_addr, "Outlet not found in the node registry");
@@ -246,6 +248,7 @@ pub trait Outlets {
         tls: bool,
         from: Option<&Address>,
         policy_expression: Option<PolicyExpression>,
+        privileged: bool,
     ) -> miette::Result<OutletStatus>;
 }
 
@@ -259,8 +262,9 @@ impl Outlets for BackgroundNodeClient {
         tls: bool,
         from: Option<&Address>,
         policy_expression: Option<PolicyExpression>,
+        privileged: bool,
     ) -> miette::Result<OutletStatus> {
-        let mut payload = CreateOutlet::new(to, tls, from.cloned(), true);
+        let mut payload = CreateOutlet::new(to, tls, from.cloned(), true, privileged);
         if let Some(policy_expression) = policy_expression {
             payload.set_policy_expression(policy_expression);
         }

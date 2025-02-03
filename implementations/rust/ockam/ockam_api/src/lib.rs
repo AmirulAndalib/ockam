@@ -22,7 +22,6 @@ extern crate tracing;
 pub mod address;
 pub mod authenticator;
 pub mod cli_state;
-pub mod cloud;
 pub mod config;
 pub mod echoer;
 pub mod enroll;
@@ -32,26 +31,32 @@ pub mod kafka;
 pub mod minicbor_url;
 pub mod nodes;
 pub mod okta;
+pub mod orchestrator;
 pub mod port_range;
+pub mod session;
 pub mod uppercase;
 mod version;
 
 pub mod authority_node;
-mod influxdb_token_lease;
+pub mod influxdb;
 
 pub mod logs;
 mod schema;
-mod session;
 
+mod date;
+mod multiaddr_resolver;
+mod rendezvous_healthcheck;
 pub mod test_utils;
 mod ui;
 mod util;
 
 pub use cli_state::CliState;
+pub use date::UtcDateTime;
 pub use error::*;
-pub use influxdb_token_lease::*;
+pub use multiaddr_resolver::*;
 pub use nodes::service::default_address::*;
-pub use session::sessions::ConnectionStatus;
+pub use rendezvous_healthcheck::*;
+pub use session::connection_status::ConnectionStatus;
 pub use ui::*;
 pub use util::*;
 pub use version::*;

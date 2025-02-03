@@ -5,27 +5,31 @@ use ockam_api::logs::{
 
 use opentelemetry::global;
 use opentelemetry::trace::Tracer;
-
-use opentelemetry_sdk::{self as sdk};
-use sdk::testing::logs::*;
-use sdk::testing::trace::*;
-
+use opentelemetry_sdk::testing::logs::InMemoryLogsExporter;
+use opentelemetry_sdk::testing::trace::InMemorySpanExporter;
 use std::fs;
-
 use tempfile::NamedTempFile;
 
-use ockam_api::cli_state::random_name;
+use ockam_api::cli_state::{random_name, CliStateMode};
+use ockam_api::CliState;
 use tracing::{error, info};
 use tracing_core::Level;
 
 /// These tests need to be integration tests
 /// They need to run in isolation because
 /// they set up some global spans / logs exporters that might interact with other tests
-#[test]
-fn test_log_and_traces() {
+#[tokio::test]
+async fn test_log_and_traces() {
+    let db_file = NamedTempFile::new().unwrap();
+    let cli_state_directory = db_file.path().parent().unwrap().join(random_name());
+    let mode = CliStateMode::Persistent(cli_state_directory);
+    let cli = CliState::create(mode)
+        .await
+        .unwrap()
+        .set_tracing_enabled(true);
+
     let temp_file = NamedTempFile::new().unwrap();
     let log_directory = &temp_file.path().parent().unwrap().join(random_name());
-
     let spans_exporter = InMemorySpanExporter::default();
     let logs_exporter = InMemoryLogsExporter::default();
     let guard = LoggingTracing::setup_with_exporters(
@@ -34,7 +38,7 @@ fn test_log_and_traces() {
         &make_configuration()
             .unwrap()
             .set_log_directory(log_directory.into()),
-        &ExportingConfiguration::foreground().unwrap(),
+        &ExportingConfiguration::foreground(&cli).await.unwrap(),
         "test",
         None,
     );
@@ -46,7 +50,8 @@ fn test_log_and_traces() {
     });
 
     // check that the spans are exported
-    guard.force_flush();
+    guard.force_flush().await;
+
     let spans = spans_exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1);
     let parent_span = spans.first().unwrap();
@@ -69,12 +74,12 @@ fn test_log_and_traces() {
         if file_path.to_string_lossy().contains("stdout") {
             let contents = fs::read_to_string(file_path).unwrap();
             assert!(
-                contents.contains("INFO logging_tracing: inside span"),
+                contents.contains("INFO inside span logging_tracing"),
                 "{:?}",
                 contents
             );
             assert!(
-                contents.contains("ERROR logging_tracing: something went wrong!"),
+                contents.contains("ERROR something went wrong! logging_tracing"),
                 "{:?}",
                 contents
             );

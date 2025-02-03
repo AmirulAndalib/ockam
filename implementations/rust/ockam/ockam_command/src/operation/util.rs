@@ -1,10 +1,10 @@
 use colorful::Colorful;
 use miette::miette;
 
-use ockam_api::cloud::operation::Operations;
-use ockam_api::cloud::project::{Project, ProjectsOrchestratorApi};
 use ockam_api::colors::OckamColor;
 use ockam_api::nodes::InMemoryNode;
+use ockam_api::orchestrator::operation::Operations;
+use ockam_api::orchestrator::project::{Project, ProjectsOrchestratorApi};
 use ockam_api::{fmt_log, fmt_para};
 use ockam_node::Context;
 
@@ -16,7 +16,7 @@ pub async fn check_for_project_completion(
     node: &InMemoryNode,
     project: Project,
 ) -> miette::Result<Project> {
-    let pb = opts.terminal.progress_bar();
+    let pb = opts.terminal.spinner();
     if let Some(spinner) = pb.as_ref() {
         let message = format!(
             "Configuring project...\n{}\n{}",
@@ -41,6 +41,7 @@ pub async fn check_for_project_completion(
     Ok(project)
 }
 
+#[allow(unused)]
 pub async fn check_for_operation_completion(
     opts: &CommandGlobalOpts,
     ctx: &Context,
@@ -48,7 +49,7 @@ pub async fn check_for_operation_completion(
     operation_id: &str,
     operation_name: &str,
 ) -> miette::Result<()> {
-    let pb = opts.terminal.progress_bar();
+    let pb = opts.terminal.spinner();
     if let Some(spinner) = pb.as_ref() {
         let message = format!(
             "Waiting for {operation_name} to finish ...\n{}",

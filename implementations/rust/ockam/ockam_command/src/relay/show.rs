@@ -11,18 +11,16 @@ use ockam_api::nodes::BackgroundNodeClient;
 use ockam_core::api::Request;
 use ockam_multiaddr::MultiAddr;
 
-use crate::{docs, CommandGlobalOpts};
 use ockam_api::colors::OckamColor;
+use ockam_api::output::Output;
 use ockam_api::terminal::{Terminal, TerminalStream};
 use ockam_api::ConnectionStatus;
-use ockam_core::AsyncTryClone;
+use ockam_core::TryClone;
 use serde::Serialize;
 
 use crate::terminal::tui::ShowCommandTui;
 use crate::tui::PluralTerm;
-use crate::util::async_cmd;
-use crate::util::colorize_connection_status;
-use ockam_api::output::Output;
+use crate::{docs, CommandGlobalOpts};
 
 const PREVIEW_TAG: &str = include_str!("../static/preview_tag.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/show/after_long_help.txt");
@@ -43,22 +41,12 @@ pub struct ShowCommand {
 }
 
 impl ShowCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
     pub fn name(&self) -> String {
         "relay show".into()
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
-        ShowTui::run(
-            ctx.async_try_clone().await.into_diagnostic()?,
-            opts,
-            self.clone(),
-        )
-        .await
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+        ShowTui::run(ctx.try_clone().into_diagnostic()?, opts, self.clone()).await
     }
 }
 
@@ -110,7 +98,7 @@ impl ShowCommandTui for ShowTui {
             .node
             .ask(&self.ctx, Request::get("/node/relay"))
             .await?;
-        Ok(relays.into_iter().map(|i| i.alias().to_string()).collect())
+        Ok(relays.into_iter().map(|i| i.name().to_string()).collect())
     }
 
     async fn show_single(&self, item_name: &str) -> miette::Result<()> {
@@ -131,7 +119,7 @@ impl ShowCommandTui for ShowTui {
 
 #[derive(Serialize)]
 struct RelayShowOutput {
-    pub alias: String,
+    pub name: String,
     pub destination: MultiAddr,
     pub connection_status: ConnectionStatus,
     pub relay_route: Option<String>,
@@ -142,7 +130,7 @@ struct RelayShowOutput {
 impl From<RelayInfo> for RelayShowOutput {
     fn from(r: RelayInfo) -> Self {
         Self {
-            alias: r.alias().to_string(),
+            name: r.name().to_string(),
             destination: r.destination_address().clone(),
             connection_status: r.connection_status(),
             relay_route: r.forwarding_route().clone(),
@@ -157,15 +145,15 @@ impl Output for RelayShowOutput {
         Ok(formatdoc!(
             r#"
         Relay:
-            Alias: {alias}
+            Name: {alias}
             Destination: {destination_address}
             Status: {connection_status}
             Relay Route: {route}
             Remote Address: {remote_addr}
             Worker Address: {worker_addr}
         "#,
-            alias = self.alias,
-            connection_status = colorize_connection_status(self.connection_status),
+            alias = self.name,
+            connection_status = self.connection_status.to_string(),
             destination_address = self.destination.to_string(),
             route = self.relay_route.as_deref().unwrap_or("N/A"),
             remote_addr = self
@@ -184,14 +172,14 @@ impl Output for RelayShowOutput {
     fn as_list_item(&self) -> ockam_api::Result<String> {
         Ok(formatdoc!(
             r#"
-            Alias: {alias}
+            Name: {alias}
             Status: {connection_status}
             Remote Address: {remote_address}"#,
             alias = self
-                .alias
+                .name
                 .as_str()
                 .color(OckamColor::PrimaryResource.color()),
-            connection_status = colorize_connection_status(self.connection_status),
+            connection_status = self.connection_status.to_string(),
             remote_address = self
                 .remote_address
                 .as_ref()

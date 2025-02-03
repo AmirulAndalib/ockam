@@ -1,4 +1,4 @@
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use tracing::{debug, warn};
 
 use ockam_core::compat::boxed::Box;
@@ -111,7 +111,7 @@ impl CommonStateMachine {
             None => None,
         };
 
-        self.presented_credential = credential.clone();
+        self.presented_credential.clone_from(&credential);
         let credentials = credential.map(|c| vec![c]).unwrap_or(vec![]);
 
         let payload = IdentityAndCredentials {
@@ -119,7 +119,7 @@ impl CommonStateMachine {
             purpose_key_attestation: self.purpose_key_attestation.clone(),
             credentials,
         };
-        Ok(minicbor::to_vec(payload)?)
+        ockam_core::cbor_encode_preallocate(payload)
     }
 
     /// Verify the identity sent by the other party: the Purpose Key and the credentials must be valid
@@ -293,7 +293,7 @@ impl CommonStateMachine {
 }
 
 /// This internal structure is used as a payload in the XX protocol
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 pub(super) struct IdentityAndCredentials {
     /// Exported identity

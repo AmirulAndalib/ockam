@@ -1,6 +1,8 @@
 use crate::portal::addresses::{Addresses, PortalType};
 use crate::{portal::TcpPortalWorker, PortalMessage, TcpOutletOptions, TcpRegistry};
-use ockam_core::{async_trait, Address, DenyAll, NeutralMessage, Result, Routed, Worker};
+use ockam_core::{
+    async_trait, Address, DenyAll, NeutralMessage, Result, Routed, SecureChannelLocalInfo, Worker,
+};
 use ockam_node::{Context, WorkerBuilder};
 use ockam_transport_core::{HostnamePort, TransportError};
 use tracing::{debug, instrument};
@@ -27,7 +29,7 @@ impl TcpOutletListenWorker {
     }
 
     #[instrument(skip_all, name = "TcpOutletListenWorker::start")]
-    pub(crate) async fn start(
+    pub(crate) fn start(
         ctx: &Context,
         registry: TcpRegistry,
         address: Address,
@@ -43,8 +45,7 @@ impl TcpOutletListenWorker {
             .with_address(address)
             .with_incoming_access_control_arc(access_control)
             .with_outgoing_access_control(DenyAll)
-            .start(ctx)
-            .await?;
+            .start(ctx)?;
 
         Ok(())
     }
@@ -57,14 +58,16 @@ impl Worker for TcpOutletListenWorker {
 
     #[instrument(skip_all, name = "TcpOutletListenWorker::initialize")]
     async fn initialize(&mut self, ctx: &mut Self::Context) -> Result<()> {
-        self.registry.add_outlet_listener_worker(&ctx.address());
+        self.registry
+            .add_outlet_listener_worker(ctx.primary_address());
 
         Ok(())
     }
 
     #[instrument(skip_all, name = "TcpOutletListenWorker::shutdown")]
     async fn shutdown(&mut self, ctx: &mut Self::Context) -> Result<()> {
-        self.registry.remove_outlet_listener_worker(&ctx.address());
+        self.registry
+            .remove_outlet_listener_worker(ctx.primary_address());
 
         Ok(())
     }
@@ -75,9 +78,13 @@ impl Worker for TcpOutletListenWorker {
         ctx: &mut Self::Context,
         msg: Routed<Self::Message>,
     ) -> Result<()> {
-        let return_route = msg.return_route();
+        let their_identifier = SecureChannelLocalInfo::find_info(msg.local_message())
+            .map(|l| l.their_identifier())
+            .ok();
         let src_addr = msg.src_addr();
-        let body = msg.into_body()?.into_vec();
+        let msg = msg.into_local_message();
+        let return_route = msg.return_route;
+        let body = msg.payload;
         let msg = PortalMessage::decode(&body)?;
 
         if !matches!(msg, PortalMessage::Ping) {
@@ -86,8 +93,7 @@ impl Worker for TcpOutletListenWorker {
 
         let addresses = Addresses::generate(PortalType::Outlet);
 
-        self.options
-            .setup_flow_control_for_outlet(ctx.flow_controls(), &addresses, &src_addr);
+        TcpOutletOptions::setup_flow_control_for_outlet(ctx.flow_controls(), &addresses, &src_addr);
 
         TcpPortalWorker::start_new_outlet(
             ctx,
@@ -95,11 +101,12 @@ impl Worker for TcpOutletListenWorker {
             self.hostname_port.clone(),
             self.options.tls,
             return_route.clone(),
+            their_identifier,
             addresses.clone(),
             self.options.incoming_access_control.clone(),
             self.options.outgoing_access_control.clone(),
-        )
-        .await?;
+            self.options.portal_payload_length,
+        )?;
 
         debug!("Created Tcp Outlet at {}", addresses.sender_remote);
 

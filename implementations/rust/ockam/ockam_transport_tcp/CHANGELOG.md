@@ -4,6 +4,170 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.135.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.134.0 - 2025-01-09
+
+### Added
+
+- Setting `no_delay` in every tcp connection
+- Introduce env variables to adjust transport performance
+- Improve logs for tcp portals creation
+- Improvements to portals commands arguments
+- Updated dependencies
+
+## 0.133.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Updated dependencies
+
+### Fixed
+
+- Prevent ebpf detach on `TcpTransport` drop
+- Use legacy netlink ebpf attachment on kernel version 6.6.0+
+
+## 0.132.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Increased portal throughput by increasing payload size
+- Updated dependencies
+
+## 0.131.0 - 2024-11-27
+
+### Added
+
+- Use `ockam_ebpf` from a dedicated repo
+- Encoding and allocation optimizations for privileged portals
+- Add periodic interface scan and ebpf attachment
+- Update ebpf
+- Updated dependencies
+
+## 0.130.0 - 2024-11-12
+
+### Added
+
+- Add `route_index`
+- Tie each tcp connection inside portal to an `Identifier`
+- Add `CAP_NET_ADMIN` to ebpf requirements check
+- Async read from the rawsocket
+- Add ebpf portal integration test
+- Rename ebpf portals -> privileged portals
+- Reuse buffer inside `TcpSendWorker`
+- Updated dependencies
+
+### Fixed
+
+- In portals, check identity change only for remote packets
+
+## 0.129.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.128.0 - 2024-10-24
+
+### Added
+
+- Check capabilities before using ebpf portals
+- Updated dependencies
+
+## 0.127.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Bump aya from 0.12.0 to 0.13.0
+
+## 0.126.0 - 2024-10-16
+
+### Added
+
+- `eBPF` portal updates:
+- Add ebpf portal bats tests
+- Updated dependencies
+
+## 0.125.0 - 2024-10-15
+
+### Added
+
+- Use more monolith structure for ebpf portals
+- Updated dependencies
+
+### Changed
+
+- Bump rustls-native-certs from 0.7.3 to 0.8.0
+
+## 0.124.0 - 2024-09-23
+
+### Added
+
+- Added `TLS` inlet support
+- Implementation of reliable `TCP` portals
+- Unload ebpfs on `ockam reset`
+- Updated dependencies
+
+## 0.123.0 - 2024-08-14
+
+### Added
+
+- Heavy kafka refactoring, moved portal interceptor from `api` to `tcp` crate
+- Kafka cleanups
+- Updated dependencies
+
+## 0.122.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.121.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.120.0 - 2024-07-29
+
+### Added
+
+- Improve transport imports
+- Implicitly resolve outlet addresses during connection
+- Remove sync operations
+- Updated dependencies
+
+## 0.119.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+## 0.118.0 - 2024-07-01
+
+### Added
+
+- Improve transport imports
+- Add possibility to pause `TCP` inlets
+- Change tcp protocol serialization
+- Add secure channel padding and optimize encoding
+- Updated dependencies
+
+### Fixed
+
+- Account for `minicbor` length calculation bug
+
 ## 0.117.0 - 2024-06-25
 
 ### Added

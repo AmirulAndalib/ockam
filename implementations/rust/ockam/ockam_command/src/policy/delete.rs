@@ -13,11 +13,10 @@ use ockam_api::fmt_ok;
 use ockam_api::nodes::models::policies::ResourceTypeOrName;
 use ockam_api::nodes::{BackgroundNodeClient, Policies};
 use ockam_api::terminal::{Terminal, TerminalStream};
-use ockam_core::AsyncTryClone;
+use ockam_core::TryClone;
 
 use crate::terminal::tui::DeleteCommandTui;
 use crate::tui::PluralTerm;
-use crate::util::async_cmd;
 
 #[derive(Clone, Debug, Args)]
 pub struct DeleteCommand {
@@ -32,21 +31,16 @@ pub struct DeleteCommand {
 }
 
 impl DeleteCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "policy delete".into()
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         DeleteTui::run(ctx, opts, self.clone()).await
     }
 }
 
+#[derive(TryClone)]
 struct DeleteTui {
     ctx: Context,
     opts: CommandGlobalOpts,
@@ -62,7 +56,7 @@ impl DeleteTui {
     ) -> miette::Result<()> {
         let node = BackgroundNodeClient::create(ctx, &opts.state, &cmd.at).await?;
         let tui = Self {
-            ctx: ctx.async_try_clone().await.into_diagnostic()?,
+            ctx: ctx.try_clone().into_diagnostic()?,
             opts,
             node,
             cmd,

@@ -1,6 +1,6 @@
 [package]
 name = "ockam_transport_websocket"
-version = "0.108.0"
+version = "0.126.0"
 authors = ["Ockam Developers"]
 categories = [
   "cryptography",
@@ -16,7 +16,7 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/build-trust/ockam/implementations/rust/ockam/ockam_transport_websocket"
-rust-version = "1.56.0"
+rust-version = "1.70.0"
 description = """
 WebSocket Transport for the Ockam Routing Protocol.
 """
@@ -45,13 +45,13 @@ alloc = [
 
 [dependencies]
 futures-util = { version = "0.3", default-features = false, features = ["tokio-io"] }
-ockam_core = { path = "../ockam_core", version = "^0.111.0", default_features = false }
-ockam_node = { path = "../ockam_node", version = "^0.119.0", default_features = false }
-ockam_transport_core = { path = "../ockam_transport_core", version = "^0.84.0", default_features = false }
+ockam_core = { path = "../ockam_core", version = "^0.124.0", default-features = false }
+ockam_node = { path = "../ockam_node", version = "^0.137.0", default-features = false }
+ockam_transport_core = { path = "../ockam_transport_core", version = "^0.101.0", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
-tokio = { version = "1.38", default-features = false, optional = true, features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-std"] }
-tokio-tungstenite = { version = "0.23.1", default-features = false, optional = true, features = ["connect"] }
+tokio = { version = "1.41", default-features = false, optional = true, features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-std"] }
+tokio-tungstenite = { version = "0.24.0", default-features = false, optional = true, features = ["connect"] }
 tracing = { version = "0.1", default-features = false }
 
 [dev-dependencies]
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0" }
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0" }

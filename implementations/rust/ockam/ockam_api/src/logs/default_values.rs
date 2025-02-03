@@ -22,15 +22,15 @@ pub(crate) const DEFAULT_OPENTELEMETRY_ENDPOINT: &str =
 /// TRACING
 ///
 
-/// Timeout for trying to access the OpenTelemetry collector endpoint when running a command
+/// Timeout for trying to access the Telemetry collector endpoint when running a command
 /// It is quite high but experimentation shows that sometimes there's quite some lag even if the endpoint is available
-pub(crate) const DEFAULT_OPENTELEMETRY_ENDPOINT_FOREGROUND_CONNECTION_TIMEOUT: Duration =
+pub(crate) const DEFAULT_TELEMETRY_ENDPOINT_FOREGROUND_CONNECTION_TIMEOUT: Duration =
     Duration::from_millis(500);
 
-/// Timeout for trying to access the OpenTelemetry collector endpoint for a background
+/// Timeout for trying to access the Telemetry collector endpoint for a background
 /// Since the node is going to run uninterrupted, we leave a longer amount of time than for a command
 /// to try to reach the endpoint
-pub(crate) const DEFAULT_OPENTELEMETRY_ENDPOINT_BACKGROUND_CONNECTION_TIMEOUT: Duration =
+pub(crate) const DEFAULT_TELEMETRY_ENDPOINT_BACKGROUND_CONNECTION_TIMEOUT: Duration =
     Duration::from_secs(2);
 
 /// Timeout for exporting spans or log records
@@ -44,14 +44,19 @@ pub(crate) const DEFAULT_FOREGROUND_EXPORT_SCHEDULED_DELAY: Duration = Duration:
 pub(crate) const DEFAULT_BACKGROUND_EXPORT_SCHEDULED_DELAY: Duration = Duration::from_secs(1);
 
 // Size of the queue used to batch spans.
-pub(crate) const DEFAULT_SPAN_EXPORT_QUEUE_SIZE: u16 = 2048;
+pub(crate) const DEFAULT_SPAN_EXPORT_QUEUE_SIZE: u16 = 32768;
 
 // Size of the queue used to batch logs.
-pub(crate) const DEFAULT_LOG_EXPORT_QUEUE_SIZE: u16 = 2048;
+pub(crate) const DEFAULT_LOG_EXPORT_QUEUE_SIZE: u16 = 32768;
 
-// Maximum time for sending log record batches when using a portal
-pub(crate) const DEFAULT_FOREGROUND_LOG_EXPORT_PORTAL_CUTOFF: Duration = Duration::from_millis(300);
+// Maximum time for sending log record batches when using a foreground node
+pub(crate) const DEFAULT_FOREGROUND_LOG_EXPORT_CUTOFF: Duration = Duration::from_millis(3000);
 
-// Maximum time for sending span batches when using a portal
-pub(crate) const DEFAULT_FOREGROUND_SPAN_EXPORT_PORTAL_CUTOFF: Duration =
-    Duration::from_millis(300);
+// Maximum time for sending span batches when using a foreground node
+pub(crate) const DEFAULT_FOREGROUND_SPAN_EXPORT_CUTOFF: Duration = Duration::from_millis(3000);
+
+// Maximum time for sending log record batches when using a background node
+pub(crate) const DEFAULT_BACKGROUND_LOG_EXPORT_CUTOFF: Duration = Duration::from_millis(3000);
+
+// Maximum time for sending span batches when using a background node
+pub(crate) const DEFAULT_BACKGROUND_SPAN_EXPORT_CUTOFF: Duration = Duration::from_millis(3000);

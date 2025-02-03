@@ -17,11 +17,15 @@ pub const OCKAM_ROLE_ATTRIBUTE_KEY: &str = "ockam-role";
 /// the corresponding key is [`OCKAM_ROLE_ATTRIBUTE_KEY`]
 pub const OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE: &str = "enroller";
 
+/// Identity attribute key that indicates the privileges to access the project TLS certificate
+pub const OCKAM_TLS_ATTRIBUTE_KEY: &str = "ockam-tls-certificate";
+
 pub struct DirectAuthenticatorError(pub String);
 
 pub type DirectAuthenticatorResult<T> = Either<T, DirectAuthenticatorError>;
 
 pub struct DirectAuthenticator {
+    authority: Identifier,
     members: Arc<dyn AuthorityMembersRepository>,
     identities_attributes: Arc<IdentitiesAttributes>,
     account_authority: Option<AccountAuthorityInfo>,
@@ -59,11 +63,13 @@ impl AccountAuthorityInfo {
 
 impl DirectAuthenticator {
     pub fn new(
+        authority: &Identifier,
         members: Arc<dyn AuthorityMembersRepository>,
         identities_attributes: Arc<IdentitiesAttributes>,
         account_authority: Option<AccountAuthorityInfo>,
     ) -> Self {
         Self {
+            authority: authority.clone(),
             members,
             identities_attributes,
             account_authority,
@@ -78,6 +84,7 @@ impl DirectAuthenticator {
         attributes: &BTreeMap<String, String>,
     ) -> Result<DirectAuthenticatorResult<()>> {
         let check = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             enroller,
@@ -119,7 +126,7 @@ impl DirectAuthenticator {
         let member =
             AuthorityMember::new(identifier.clone(), attrs, enroller.clone(), now()?, false);
 
-        if let Err(err) = self.members.add_member(member).await {
+        if let Err(err) = self.members.add_member(&self.authority, member).await {
             warn!("Error adding member {} directly: {}", identifier, err);
             return Ok(Either::Right(DirectAuthenticatorError(
                 "Error adding member".to_string(),
@@ -141,6 +148,7 @@ impl DirectAuthenticator {
         identifier: &Identifier,
     ) -> Result<DirectAuthenticatorResult<AttributesEntry>> {
         let check = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             enroller,
@@ -155,7 +163,7 @@ impl DirectAuthenticator {
             )));
         }
 
-        match self.members.get_member(identifier).await? {
+        match self.members.get_member(&self.authority, identifier).await? {
             Some(member) => {
                 let entry = AttributesEntry::new(
                     member.attributes().clone(),
@@ -181,6 +189,7 @@ impl DirectAuthenticator {
         enroller: &Identifier,
     ) -> Result<DirectAuthenticatorResult<HashMap<Identifier, AttributesEntry>>> {
         let check = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             enroller,
@@ -195,7 +204,7 @@ impl DirectAuthenticator {
             )));
         }
 
-        let all_members = self.members.get_members().await?;
+        let all_members = self.members.get_members(&self.authority).await?;
 
         let mut res = HashMap::<Identifier, AttributesEntry>::default();
         for member in all_members {
@@ -211,6 +220,24 @@ impl DirectAuthenticator {
         Ok(Either::Left(res))
     }
 
+    #[instrument(skip_all, fields(enroller = %enroller))]
+    pub async fn delete_all_members(
+        &self,
+        enroller: &Identifier,
+    ) -> Result<DirectAuthenticatorResult<()>> {
+        match self.list_members(enroller).await? {
+            Either::Left(members) => {
+                for member in members.keys() {
+                    if member != enroller {
+                        _ = self.delete_member(enroller, member).await?
+                    }
+                }
+                Ok(Either::Left(()))
+            }
+            Either::Right(e) => Ok(Either::Right(e)),
+        }
+    }
+
     #[instrument(skip_all, fields(enroller = %enroller, identifier = %identifier))]
     pub async fn delete_member(
         &self,
@@ -218,6 +245,7 @@ impl DirectAuthenticator {
         identifier: &Identifier,
     ) -> Result<DirectAuthenticatorResult<()>> {
         let check_enroller = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             enroller,
@@ -236,6 +264,7 @@ impl DirectAuthenticator {
         }
 
         let check_member = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             identifier,
@@ -263,7 +292,9 @@ impl DirectAuthenticator {
             )));
         }
 
-        self.members.delete_member(identifier).await?;
+        self.members
+            .delete_member(&self.authority, identifier)
+            .await?;
 
         info!("Successfully deleted member {}", identifier);
 

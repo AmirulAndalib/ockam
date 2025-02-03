@@ -3,15 +3,60 @@ use crate::{
     Address, Result, RouteError, TransportType,
 };
 use core::fmt::{self, Display};
-use minicbor::{Decode, Encode};
+use core::ops::{Add, AddAssign};
+use minicbor::{CborLen, Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// A full route to a peer.
-#[derive(Serialize, Deserialize, Decode, Encode, Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
-#[rustfmt::skip]
+#[derive(Serialize, Deserialize, Encode, Decode, CborLen, Debug, Clone, Hash, Ord, PartialOrd, Eq, PartialEq)]
 #[cbor(transparent)]
+#[rustfmt::skip]
 pub struct Route {
     #[n(0)] inner: VecDeque<Address>,
+}
+
+impl AddAssign for Route {
+    fn add_assign(&mut self, mut rhs: Self) {
+        self.inner.append(&mut rhs.inner);
+    }
+}
+
+impl Add for Route {
+    type Output = Route;
+
+    fn add(mut self, rhs: Self) -> Self::Output {
+        self += rhs;
+        self
+    }
+}
+
+impl Add<Route> for Address {
+    type Output = Route;
+
+    fn add(self, rhs: Route) -> Self::Output {
+        rhs.modify().prepend(self).build()
+    }
+}
+
+impl<T> AddAssign<T> for Route
+where
+    T: Into<Address>,
+{
+    fn add_assign(&mut self, rhs: T) {
+        self.inner.push_back(rhs.into());
+    }
+}
+
+impl<T> Add<T> for Route
+where
+    T: Into<Address>,
+{
+    type Output = Route;
+
+    fn add(mut self, rhs: T) -> Self::Output {
+        self += rhs;
+        self
+    }
 }
 
 impl Route {
@@ -30,7 +75,7 @@ impl Route {
     /// ```
     ///
     #[allow(clippy::new_ret_no_self)]
-    pub fn new() -> RouteBuilder<'static> {
+    pub fn new() -> RouteBuilder {
         RouteBuilder::new()
     }
 
@@ -43,7 +88,7 @@ impl Route {
     /// # pub const TCP: TransportType = TransportType::new(1);
     /// // ["1#alice", "0#bob"]
     /// let route = route![
-    ///     Address::new(TCP, "alice"),
+    ///     Address::new_with_string(TCP, "alice"),
     ///     "bob",
     /// ];
     /// ```
@@ -104,11 +149,8 @@ impl Route {
     ///     .into();
     /// ```
     ///
-    pub fn modify(&mut self) -> RouteBuilder {
-        RouteBuilder {
-            inner: self.inner.clone(),
-            write_back: Some(self),
-        }
+    pub fn modify(self) -> RouteBuilder {
+        RouteBuilder { inner: self.inner }
     }
 
     /// Return the next `Address` and remove it from this route.
@@ -132,7 +174,12 @@ impl Route {
     ///
     #[track_caller]
     pub fn step(&mut self) -> Result<Address> {
-        Ok(self.inner.pop_front().ok_or(RouteError::IncompleteRoute)?)
+        // to avoid the error being allocated when not needed
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        Ok(self
+            .inner
+            .pop_front()
+            .ok_or_else(|| RouteError::IncompleteRoute)?)
     }
 
     /// Return the next `Address` from this route without removing it.
@@ -156,7 +203,12 @@ impl Route {
     ///
     #[track_caller]
     pub fn next(&self) -> Result<&Address> {
-        Ok(self.inner.front().ok_or(RouteError::IncompleteRoute)?)
+        // to avoid the error being allocated when not needed
+        #[allow(clippy::unnecessary_lazy_evaluations)]
+        Ok(self
+            .inner
+            .front()
+            .ok_or_else(|| RouteError::IncompleteRoute)?)
     }
 
     /// Return the final recipient address.
@@ -169,7 +221,7 @@ impl Route {
     /// let route: Route = route!["1#alice", "bob"];
     ///
     /// // "0#bob"
-    /// let final_hop: Address = route.recipient()?;
+    /// let final_hop: &Address = route.recipient()?;
     ///
     /// // ["1#alice", "0#bob"]
     /// route
@@ -178,14 +230,13 @@ impl Route {
     /// # }
     /// ```
     #[track_caller]
-    pub fn recipient(&self) -> Result<Address> {
-        // `TODO` For consistency we should return a
-        // Result<&Address> instead of an Address.clone().
+    pub fn recipient(&self) -> Result<&Address> {
+        // to avoid the error being allocated when not needed
+        #[allow(clippy::unnecessary_lazy_evaluations)]
         Ok(self
             .inner
             .back()
-            .cloned()
-            .ok_or(RouteError::IncompleteRoute)?)
+            .ok_or_else(|| RouteError::IncompleteRoute)?)
     }
 
     /// Iterate over all addresses of this route.
@@ -252,6 +303,17 @@ impl Route {
     pub fn is_local(&self) -> bool {
         self.iter().all(|a| a.is_local())
     }
+
+    /// Return inner VecDeque
+    pub fn inner(self) -> VecDeque<Address> {
+        self.inner
+    }
+}
+
+impl Default for Route {
+    fn default() -> Self {
+        Route::new().into()
+    }
 }
 
 impl Display for Route {
@@ -275,10 +337,10 @@ impl From<Route> for Vec<Address> {
 }
 
 /// Convert a `RouteBuilder` into a `Route`.
-impl From<RouteBuilder<'_>> for Route {
-    fn from(RouteBuilder { ref inner, .. }: RouteBuilder) -> Self {
+impl From<RouteBuilder> for Route {
+    fn from(builder: RouteBuilder) -> Self {
         Self {
-            inner: inner.clone(),
+            inner: builder.inner,
         }
     }
 }
@@ -293,23 +355,21 @@ impl<T: Into<Address>> From<T> for Route {
 }
 
 /// A utility type for building and manipulating routes.
-pub struct RouteBuilder<'r> {
+pub struct RouteBuilder {
     inner: VecDeque<Address>,
-    write_back: Option<&'r mut Route>,
 }
 
-impl Default for RouteBuilder<'_> {
+impl Default for RouteBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RouteBuilder<'_> {
+impl RouteBuilder {
     #[doc(hidden)]
     pub fn new() -> Self {
         Self {
             inner: VecDeque::new(),
-            write_back: None,
         }
     }
 
@@ -410,11 +470,8 @@ impl RouteBuilder<'_> {
     ///     .into();
     /// ```
     ///
-    pub fn append_route(mut self, route: Route) -> Self {
-        route
-            .inner
-            .into_iter()
-            .for_each(|addr| self.inner.push_back(addr));
+    pub fn append_route(mut self, route: impl Into<Route>) -> Self {
+        self.inner.append(&mut route.into().inner);
         self
     }
 
@@ -478,15 +535,21 @@ impl RouteBuilder<'_> {
         self.inner.pop_back();
         self
     }
-}
 
-impl Drop for RouteBuilder<'_> {
-    fn drop(&mut self) {
-        if self.write_back.is_some() {
-            **self.write_back.as_mut().unwrap() = Route {
-                inner: self.inner.clone(),
-            };
-        }
+    /// Builds the route.
+    /// Same as `into()`, but without the need to specify the type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use ockam_core::{route, Route, RouteBuilder};
+    /// let route = Route::new()
+    ///     .append("1#alice")
+    ///     .append("bob")
+    ///     .build();
+    /// ```
+    pub fn build(self) -> Route {
+        Route { inner: self.inner }
     }
 }
 
@@ -543,7 +606,7 @@ mod tests {
         let mut route = route![address, "b"];
         assert_eq!(route.next().unwrap(), &Address::from_string("0#a"));
         assert_eq!(route.next().unwrap(), &Address::from_string("0#a"));
-        assert_eq!(route.recipient().unwrap(), Address::from_string("0#b"));
+        assert_eq!(route.recipient().unwrap(), &Address::from_string("0#b"));
         assert_eq!(route.step().unwrap(), Address::from_string("0#a"));
         assert_eq!(route.step().unwrap(), Address::from_string("0#b"));
     }
@@ -552,7 +615,10 @@ mod tests {
     fn test_route_create() {
         let addresses = vec!["node-1", "node-2"];
         let route = Route::create(addresses);
-        assert_eq!(route.recipient().unwrap(), Address::from_string("0#node-2"));
+        assert_eq!(
+            route.recipient().unwrap(),
+            &Address::from_string("0#node-2")
+        );
     }
 
     #[test]
@@ -565,7 +631,10 @@ mod tests {
         let s = " node-1 =>node-2=> node-3 ";
         let mut route = Route::parse(s).unwrap();
         assert_eq!(route.next().unwrap(), &Address::from_string("0#node-1"));
-        assert_eq!(route.recipient().unwrap(), Address::from_string("0#node-3"));
+        assert_eq!(
+            route.recipient().unwrap(),
+            &Address::from_string("0#node-3")
+        );
         let _ = route.step();
         assert_eq!(route.next().unwrap(), &Address::from_string("0#node-2"));
     }
@@ -592,10 +661,10 @@ mod tests {
 
     #[test]
     fn test_route_prepend_route() {
-        let mut r1 = route!["a", "b", "c"];
+        let r1 = route!["a", "b", "c"];
         let r2 = route!["1", "2", "3"];
 
-        r1.modify().prepend_route(r2);
+        let r1: Route = r1.modify().prepend_route(r2).into();
         assert_eq!(r1, route!["1", "2", "3", "a", "b", "c"]);
     }
 

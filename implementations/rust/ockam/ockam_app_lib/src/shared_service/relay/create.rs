@@ -6,7 +6,7 @@ use tracing::{debug, info, trace, warn};
 
 use ockam::Context;
 use ockam_api::cli_state::CliState;
-use ockam_api::nodes::models::relay::RelayInfo;
+use ockam_api::nodes::models::relay::{RelayInfo, ReturnTiming};
 use ockam_api::nodes::InMemoryNode;
 use ockam_multiaddr::MultiAddr;
 
@@ -61,7 +61,7 @@ impl AppState {
 
     /// Create a relay at the default project if doesn't exist yet
     ///
-    /// Once it's created, a `Medic` worker will monitor it and recreate it whenever it's unresponsive
+    /// Once it's created, a `Session` worker will monitor it and recreate it whenever it's unresponsive
     async fn create_relay_impl(
         &self,
         context: &Context,
@@ -90,6 +90,7 @@ impl AppState {
                             relay_alias.clone(),
                             None,
                             Some(relay_alias),
+                            ReturnTiming::AfterConnection,
                         )
                         .await
                         .into_diagnostic()?;
@@ -121,7 +122,7 @@ async fn get_relay(
         .get_relays()
         .await
         .into_iter()
-        .find(|r| r.alias() == relay_alias))
+        .find(|r| r.name() == relay_alias))
 }
 
 async fn relay_remote_address(cli_state: &CliState) -> ockam::Result<String> {

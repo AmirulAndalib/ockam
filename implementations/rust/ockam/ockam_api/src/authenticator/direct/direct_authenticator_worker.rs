@@ -2,10 +2,10 @@ use either::Either;
 use minicbor::Decoder;
 use tracing::trace;
 
-use ockam::identity::{Identifier, IdentitiesAttributes, IdentitySecureChannelLocalInfo};
+use ockam::identity::{Identifier, IdentitiesAttributes};
 use ockam_core::api::{Method, RequestHeader, Response};
 use ockam_core::compat::sync::Arc;
-use ockam_core::{Result, Routed, Worker};
+use ockam_core::{Result, Routed, SecureChannelLocalInfo, Worker};
 use ockam_node::Context;
 
 use crate::authenticator::direct::types::AddMember;
@@ -20,12 +20,14 @@ pub struct DirectAuthenticatorWorker {
 
 impl DirectAuthenticatorWorker {
     pub fn new(
+        authority: &Identifier,
         members: Arc<dyn AuthorityMembersRepository>,
         identities_attributes: Arc<IdentitiesAttributes>,
         account_authority: Option<AccountAuthorityInfo>,
     ) -> Self {
         Self {
             authenticator: DirectAuthenticator::new(
+                authority,
                 members,
                 identities_attributes,
                 account_authority,
@@ -40,18 +42,17 @@ impl Worker for DirectAuthenticatorWorker {
     type Context = Context;
 
     async fn handle_message(&mut self, c: &mut Context, m: Routed<Self::Message>) -> Result<()> {
-        let secure_channel_info = match IdentitySecureChannelLocalInfo::find_info(m.local_message())
-        {
+        let secure_channel_info = match SecureChannelLocalInfo::find_info(m.local_message()) {
             Ok(secure_channel_info) => secure_channel_info,
             Err(_e) => {
                 let resp = Response::bad_request_no_request("secure channel required").to_vec()?;
-                c.send(m.return_route(), resp).await?;
+                c.send(m.return_route().clone(), resp).await?;
                 return Ok(());
             }
         };
 
-        let from = secure_channel_info.their_identity_id();
-        let return_route = m.return_route();
+        let from = Identifier::from(secure_channel_info.their_identifier());
+        let return_route = m.return_route().clone();
         let body = m.into_body()?;
         let mut dec = Decoder::new(&body);
         let req: RequestHeader = dec.decode()?;
@@ -106,6 +107,13 @@ impl Worker for DirectAuthenticatorWorker {
                     Either::Right(error) => Response::forbidden(&req, &error.0).to_vec()?,
                 }
             }
+            (Some(Method::Delete), ["members"]) => {
+                let res = self.authenticator.delete_all_members(&from).await?;
+                match res {
+                    Either::Left(_) => Response::ok().with_headers(&req).to_vec()?,
+                    Either::Right(error) => Response::forbidden(&req, &error.0).to_vec()?,
+                }
+            }
             (Some(Method::Delete), [id]) | (Some(Method::Delete), ["members", id]) => {
                 let identifier = Identifier::try_from(id.to_string())?;
                 let res = self.authenticator.delete_member(&from, &identifier).await?;
@@ -115,7 +123,6 @@ impl Worker for DirectAuthenticatorWorker {
                     Either::Right(error) => Response::forbidden(&req, &error.0).to_vec()?,
                 }
             }
-
             _ => Response::unknown_path(&req).to_vec()?,
         };
 

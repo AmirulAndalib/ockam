@@ -1,7 +1,6 @@
 use core::sync::atomic::Ordering;
 use ockam_core::compat::sync::Arc;
-use ockam_core::compat::vec::Vec;
-use ockam_core::{route, Any, Result, Route, Routed};
+use ockam_core::{Any, Result, Route, Routed, SecureChannelLocalInfo};
 use ockam_core::{Decodable, LocalMessage};
 use ockam_node::Context;
 
@@ -12,13 +11,12 @@ use crate::secure_channel::key_tracker::KeyTracker;
 use crate::secure_channel::nonce_tracker::NonceTracker;
 use crate::secure_channel::{Addresses, Role};
 use crate::{
-    DecryptionRequest, DecryptionResponse, Identities, IdentityError,
-    IdentitySecureChannelLocalInfo, Nonce, PlaintextPayloadMessage, RefreshCredentialsMessage,
-    SecureChannelMessage,
+    DecryptionRequest, DecryptionResponse, Identities, IdentityError, Nonce,
+    PlaintextPayloadMessage, RefreshCredentialsMessage, SecureChannelMessage,
+    SecureChannelPaddedMessage, NOISE_NONCE_LEN,
 };
 
 use crate::secure_channel::encryptor_worker::SecureChannelSharedState;
-use ockam_core::errcode::{Kind, Origin};
 use ockam_vault::{AeadSecretKeyHandle, VaultForSecureChannels};
 use tracing::{debug, info, trace, warn};
 use tracing_attributes::instrument;
@@ -77,16 +75,17 @@ impl DecryptorHandler {
             &self.addresses.decryptor_remote
         );
 
-        let return_route = msg.return_route();
+        let msg = msg.into_local_message();
+        let return_route = msg.return_route;
 
         // Decode raw payload binary
-        let request = DecryptionRequest::decode(msg.payload())?;
+        let mut request = DecryptionRequest::decode(&msg.payload)?;
 
         // Decrypt the binary
-        let decrypted_payload = self.decryptor.decrypt(&request.0).await;
+        let decrypted_payload = self.decryptor.decrypt(request.0.as_mut_slice()).await;
 
         let response = match decrypted_payload {
-            Ok((payload, _nonce)) => DecryptionResponse::Ok(payload),
+            Ok((payload, _nonce)) => DecryptionResponse::Ok(payload.to_vec()),
             Err(err) => DecryptionResponse::Err(err),
         };
 
@@ -100,7 +99,7 @@ impl DecryptorHandler {
     async fn handle_payload(
         &mut self,
         ctx: &mut Context,
-        mut msg: PlaintextPayloadMessage<'_>,
+        msg: PlaintextPayloadMessage<'_>,
         nonce: Nonce,
         encrypted_msg_return_route: Route,
     ) -> Result<()> {
@@ -108,25 +107,23 @@ impl DecryptorHandler {
             let mut remote_route = self.shared_state.remote_route.write().unwrap();
             // Only overwrite if we know that's the latest address
             if remote_route.last_nonce < nonce {
-                let their_decryptor_address = remote_route.route.recipient()?;
-                remote_route.route = route![encrypted_msg_return_route, their_decryptor_address];
+                let their_decryptor_address = remote_route.route.recipient()?.clone();
+                remote_route.route = encrypted_msg_return_route + their_decryptor_address;
                 remote_route.last_nonce = nonce;
             }
         }
 
         // Add encryptor hop in the return_route (instead of our address)
-        msg.return_route
-            .modify()
-            .prepend(self.addresses.encryptor.clone());
+        let return_route = self.addresses.encryptor.clone() + msg.return_route;
 
         // Mark message LocalInfo with IdentitySecureChannelLocalInfo,
         // replacing any pre-existing entries
         let local_info =
-            IdentitySecureChannelLocalInfo::mark(vec![], self.their_identity_id.clone())?;
+            SecureChannelLocalInfo::mark(vec![], self.their_identity_id.clone().into())?;
 
         let msg = LocalMessage::new()
             .with_onward_route(msg.onward_route)
-            .with_return_route(msg.return_route)
+            .with_return_route(return_route)
             .with_payload(msg.payload.to_vec())
             .with_local_info(local_info);
 
@@ -145,13 +142,15 @@ impl DecryptorHandler {
         }
     }
 
-    async fn handle_close(&mut self, ctx: &mut Context) -> Result<()> {
+    fn handle_close(&mut self, ctx: &mut Context) -> Result<()> {
         // Prevent sending another Close message
         self.shared_state
             .should_send_close
             .store(false, Ordering::Relaxed);
         // Should be enough to stop the encryptor, since it will stop the decryptor
-        ctx.stop_worker(self.addresses.encryptor.clone()).await
+        ctx.stop_address(&self.addresses.encryptor)?;
+
+        Ok(())
     }
 
     async fn handle_refresh_credentials(
@@ -195,19 +194,17 @@ impl DecryptorHandler {
             &self.addresses.decryptor_remote
         );
 
-        let encrypted_msg_return_route = msg.return_route();
+        let msg = msg.into_local_message();
+        let encrypted_msg_return_route = msg.return_route;
 
         // Decode raw payload binary
-        let payload = msg.into_payload();
-        let payload =
-            ockam_core::bare::read_slice(payload.as_slice(), &mut 0).ok_or_else(|| {
-                ockam_core::Error::new(Origin::Transport, Kind::Protocol, "Invalid message")
-            })?;
+        let mut payload = msg.payload;
 
         // Decrypt the binary
-        let (decrypted_payload, nonce) = self.decryptor.decrypt(payload).await?;
-        let decrypted_msg: SecureChannelMessage = minicbor::decode(&decrypted_payload)?;
-        match decrypted_msg {
+        let (decrypted_payload, nonce) = self.decryptor.decrypt(payload.as_mut_slice()).await?;
+        let decrypted_msg: SecureChannelPaddedMessage = minicbor::decode(decrypted_payload)?;
+
+        match decrypted_msg.message {
             SecureChannelMessage::Payload(decrypted_msg) => {
                 self.handle_payload(ctx, decrypted_msg, nonce, encrypted_msg_return_route)
                     .await?
@@ -215,7 +212,7 @@ impl DecryptorHandler {
             SecureChannelMessage::RefreshCredentials(decrypted_msg) => {
                 self.handle_refresh_credentials(ctx, decrypted_msg).await?
             }
-            SecureChannelMessage::Close => self.handle_close(ctx).await?,
+            SecureChannelMessage::Close => self.handle_close(ctx)?,
         };
 
         Ok(())
@@ -252,17 +249,19 @@ impl Decryptor {
     }
 
     #[instrument(skip_all)]
-    pub async fn decrypt(&mut self, payload: &[u8]) -> Result<(Vec<u8>, Nonce)> {
-        if payload.len() < 8 {
+    pub async fn decrypt<'a>(&mut self, payload: &'a mut [u8]) -> Result<(&'a [u8], Nonce)> {
+        if payload.len() < NOISE_NONCE_LEN {
             return Err(IdentityError::InvalidNonce)?;
         }
 
-        let nonce = Nonce::try_from(&payload[..8])?;
+        let nonce = Nonce::try_from(&payload[..NOISE_NONCE_LEN])?;
         let nonce_tracker = if let Some(nonce_tracker) = &self.nonce_tracker {
             Some(nonce_tracker.mark(nonce)?)
         } else {
             None
         };
+
+        let rekey_key;
 
         let rekeying = self.nonce_tracker.is_some();
         let key = if rekeying {
@@ -271,27 +270,36 @@ impl Decryptor {
             if let Some(key) = self.key_tracker.get_key(nonce)? {
                 key
             } else {
-                Encryptor::rekey(&self.vault, &self.key_tracker.current_key).await?
+                rekey_key = Encryptor::rekey(&self.vault, &self.key_tracker.current_key).await?;
+                &rekey_key
             }
         } else {
-            self.key_tracker.current_key.clone()
+            &self.key_tracker.current_key
         };
 
         // to improve protection against connection disruption attacks, we want to validate the
         // message with a decryption _before_ committing to the new state
         let result = self
             .vault
-            .aead_decrypt(&key, &payload[8..], &nonce.to_aes_gcm_nonce(), &[])
+            .aead_decrypt(
+                key,
+                &mut payload[NOISE_NONCE_LEN..],
+                &nonce.to_aes_gcm_nonce(),
+                &[],
+            )
             .await;
 
-        if result.is_ok() {
-            self.nonce_tracker = nonce_tracker;
-            if let Some(key_to_delete) = self.key_tracker.update_key(key)? {
-                self.vault.delete_aead_secret_key(key_to_delete).await?;
-            }
-        }
+        match result {
+            Ok(result) => {
+                self.nonce_tracker = nonce_tracker;
+                if let Some(key_to_delete) = self.key_tracker.update_key(&key.clone())? {
+                    self.vault.delete_aead_secret_key(key_to_delete).await?;
+                }
 
-        result.map(|payload| (payload, nonce))
+                Ok((result, nonce))
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Remove the channel keys on shutdown

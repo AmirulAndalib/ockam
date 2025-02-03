@@ -50,15 +50,15 @@ teardown() {
   assert_output --partial "/service/outlet"
 
   inlet_port="$(random_port)"
-  run_success $OCKAM tcp-inlet create --at /node/n2 --from 127.0.0.1:$inlet_port --to /node/n1/service/outlet --alias "test-inlet"
+  run_success $OCKAM tcp-inlet create "test-inlet" --at /node/n2 --from 127.0.0.1:$inlet_port --to /node/n1/service/outlet
   run_success $OCKAM tcp-inlet create --at /node/n2 --from 6102 --to /node/n1/service/outlet
 
   sleep 1
 
   # Check that inlet is available for deletion and delete it
   run_success $OCKAM tcp-inlet show test-inlet --at /node/n2 --output json
-  assert_output --partial "\"alias\":\"test-inlet\""
-  assert_output --partial "\"bind_addr\":\"127.0.0.1:$inlet_port\""
+  assert_output --partial "\"alias\": \"test-inlet\""
+  assert_output --partial "\"bind_addr\": \"127.0.0.1:$inlet_port\""
 
   run_success $OCKAM tcp-inlet delete "test-inlet" --at /node/n2 --yes
 
@@ -80,8 +80,8 @@ teardown() {
   run_success $OCKAM tcp-outlet create --at /node/n2 --to $port_2
 
   run_success $OCKAM tcp-outlet show outlet --at /node/n1
-  assert_output --partial "\"worker_addr\":\"/service/outlet\""
-  assert_output --partial "\"socket_addr\":\"127.0.0.1:$port_1\""
+  assert_output --partial "\"worker_address\": \"/service/outlet\""
+  assert_output --partial "\"to\": \"127.0.0.1:$port_1\""
 
   run_success $OCKAM tcp-outlet delete "outlet" --yes
 
@@ -95,7 +95,33 @@ teardown() {
   run_success "$OCKAM" node create n2
 
   port="$(random_port)"
+  run_success $OCKAM tcp-inlet create tcp-inlet-2 --at /node/n2 --from $port --to /node/n1/service/outlet
+  sleep 1
+
+  run_success $OCKAM tcp-inlet list --at /node/n2
+  assert_output --partial "tcp-inlet-2"
+  assert_output --partial "127.0.0.1:$port"
+}
+
+@test "portals - list inlets on a node, using deprecated --alias flag" {
+  run_success "$OCKAM" node create n1
+  run_success "$OCKAM" node create n2
+
+  port="$(random_port)"
   run_success $OCKAM tcp-inlet create --at /node/n2 --from $port --to /node/n1/service/outlet --alias tcp-inlet-2
+  sleep 1
+
+  run_success $OCKAM tcp-inlet list --at /node/n2
+  assert_output --partial "tcp-inlet-2"
+  assert_output --partial "127.0.0.1:$port"
+}
+
+@test "portals - list inlets on a node, using deprecated --alias flag overriding name" {
+  run_success "$OCKAM" node create n1
+  run_success "$OCKAM" node create n2
+
+  port="$(random_port)"
+  run_success $OCKAM tcp-inlet create my-inlet --at /node/n2 --from $port --to /node/n1/service/outlet --alias tcp-inlet-2
   sleep 1
 
   run_success $OCKAM tcp-inlet list --at /node/n2
@@ -120,13 +146,13 @@ teardown() {
   run_success "$OCKAM" node create n2
 
   port="$(random_port)"
-  run_success $OCKAM tcp-inlet create --at /node/n2 --from $port --to /node/n1/service/outlet --alias "test-inlet"
+  run_success $OCKAM tcp-inlet create "test-inlet" --at /node/n2 --from $port --to /node/n1/service/outlet
   sleep 1
 
   run_success $OCKAM tcp-inlet show "test-inlet" --at /node/n2
 
   # Test if non-existing TCP inlet returns NotFound
-  run_failure $OCKAM tcp-inlet show "non-existing-inlet"
+  run_failure $OCKAM tcp-inlet show "non-existing-inlet" --at /node/n2
   assert_output --partial "not found"
 }
 
@@ -152,7 +178,7 @@ teardown() {
   port="$(random_port)"
   run_success "$OCKAM" tcp-inlet create --at /node/n2 --from "$port" --to /node/n1/service/outlet
 
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
 }
 
 @test "portals - create an inlet/outlet, download file" {
@@ -165,7 +191,7 @@ teardown() {
 
   file_name="$(random_str)".bin
   pushd "$OCKAM_HOME_BASE" && dd if=/dev/urandom of="./.tmp/$file_name" bs=1M count=50 && popd
-  run_success curl -sSf -m 20 -o "$OCKAM_HOME/$file_name" "http://127.0.0.1:$port/.tmp/$file_name"
+  run_success curl -sSf --retry-all-errors --retry-delay 5 --retry 10 -m 20 -o /dev/null "http://127.0.0.1:$port/.tmp/$file_name"
 }
 
 @test "portals - create an inlet/outlet, upload file" {
@@ -182,7 +208,7 @@ teardown() {
   mkdir "$tmp_dir_name"
   dd if=/dev/urandom of="./$tmp_dir_name/$file_name" bs=1M count=50
   popd
-  run_success curl -sS -m 20 -X POST "http://127.0.0.1:$port/upload" -F "files=@$OCKAM_HOME_BASE/.tmp/$tmp_dir_name/$file_name"
+  run_success curl -sS --retry-all-errors --retry-delay 5 --retry 10 -m 20 -X POST "http://127.0.0.1:$port/upload" -F "files=@$OCKAM_HOME_BASE/.tmp/$tmp_dir_name/$file_name"
 }
 
 @test "portals - create an inlet/outlet pair and move tcp traffic through it, where the outlet points to an HTTPs endpoint" {
@@ -209,7 +235,7 @@ teardown() {
   run_success bash -c "$OCKAM secure-channel create --from /node/green --to /node/relay/service/forward_to_blue/service/api \
     | $OCKAM tcp-inlet create --at /node/green --from $port --to -/service/outlet"
 
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
 
   run_success "$OCKAM" secure-channel list --at green
   assert_output --partial "/service"
@@ -231,9 +257,9 @@ teardown() {
   run_success "$OCKAM" tcp-outlet create --at n --to "$port"
 
   port="$(random_port)"
-  run_success "$OCKAM" tcp-inlet create --at n --from "$port" --to "/node/n/service/outlet" --alias i
+  run_success "$OCKAM" tcp-inlet create i --at n --from "$port" --to "/node/n/service/outlet"
   port="$(random_port)"
-  run_failure "$OCKAM" tcp-inlet create --at n --from "$port" --to "/node/n/service/outlet" --alias i
+  run_failure "$OCKAM" tcp-inlet create i --at n --from "$port" --to "/node/n/service/outlet"
 }
 
 @test "portals - fail to create two TCP inlets at the same socket address" {
@@ -256,9 +282,9 @@ teardown() {
   run_success "$OCKAM" node create green
   inlet_port="$(random_port)"
   run_success "$OCKAM" tcp-inlet create --at /node/green --from "$inlet_port" --to /node/blue/secure/api/service/outlet
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$inlet_port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$inlet_port"
 
-  run_success "$OCKAM" node delete blue --yes --force
+  run_success "$OCKAM" node delete blue --yes
   run_failure curl -sfI -m 3 "127.0.0.1:$inlet_port"
 
   run_success "$OCKAM" node create blue --tcp-listener-address "127.0.0.1:$node_port"
@@ -278,7 +304,7 @@ teardown() {
   run_success "$OCKAM" tcp-outlet create --at /node/n2 --to "$PYTHON_SERVER_PORT"
 
   sleep 15
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:${inlet_port}"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:${inlet_port}"
 }
 
 @test "portals - local portal, curl download, inlet credential expires" {
@@ -315,11 +341,10 @@ teardown() {
   # when the credential expires
   file_name="$(random_str)".bin
   pushd "$OCKAM_HOME_BASE" && dd if=/dev/urandom of="./.tmp/$file_name" bs=1M count=50 && popd
-  run_failure curl -sSf -m 20 --limit-rate 5M \
-    -o "$OCKAM_HOME/$file_name" "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
+  run_failure curl -sSf -m 20 --limit-rate 5M -o /dev/null "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
 
   # Consequent attempt fails
-  run_failure curl -sSf -m 20 -o "$OCKAM_HOME/$file_name" "http://127.0.0.1:$inlet_port/.tmp/$file_name"
+  run_failure curl -sSf -m 20 -o /dev/null "http://127.0.0.1:$inlet_port/.tmp/$file_name"
 }
 
 @test "portals - local portal, curl upload, inlet credential expires" {
@@ -400,11 +425,10 @@ teardown() {
   # when the credential expires
   file_name="$(random_str)".bin
   pushd "$OCKAM_HOME_BASE" && dd if=/dev/urandom of="./.tmp/$file_name" bs=1M count=50 && popd
-  run_failure curl -sSf -m 20 --limit-rate 5M \
-    -o "$OCKAM_HOME/$file_name" "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
+  run_failure curl -sSf -m 20 --limit-rate 5M -o /dev/null "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
 
   # Consequent attempt fails
-  run_failure curl -sSf -m 20 -o "$OCKAM_HOME/$file_name" "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
+  run_failure curl -sSf -m 20 -o /dev/null "http://127.0.0.1:$inlet_port/.tmp/$file_name" >/dev/null
 }
 
 @test "portals - local portal, curl upload, outlet credential expires" {
@@ -469,5 +493,5 @@ teardown() {
   # Create an inlet with the alt's identifier. Now it should be allowed to connect
   port="$(random_port)"
   run_success "$OCKAM" tcp-inlet create --from "127.0.0.1:$port" --to /node/n/secure/api/service/outlet --identity alt
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 2 -m 5 "127.0.0.1:$port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 2 -m 5 "127.0.0.1:$port"
 }

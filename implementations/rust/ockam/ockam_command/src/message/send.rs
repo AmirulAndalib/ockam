@@ -21,10 +21,10 @@ use crate::{docs, Command, CommandGlobalOpts, Error};
 const LONG_ABOUT: &str = include_str!("./static/send/long_about.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/send/after_long_help.txt");
 
-/// Send a message to an Ockam node
 #[derive(Clone, Debug, Args)]
 #[command(
 arg_required_else_help = true,
+about = docs::about("Send a message to an Ockam node"),
 long_about = docs::about(LONG_ABOUT),
 after_long_help = docs::after_help(AFTER_LONG_HELP)
 )]
@@ -64,7 +64,7 @@ impl Command for SendCommand {
         Some(self.retry_opts.clone())
     }
 
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
         // Process `--to` Multiaddr
         let (to, meta) = clean_nodes_multiaddr(&self.to, &opts.state)
             .await
@@ -82,8 +82,7 @@ impl Command for SendCommand {
         // Setup environment depending on whether we are sending the message from a background node
         // or an in-memory node
         let response: Vec<u8> = if let Some(node) = &self.from {
-            BackgroundNodeClient::create_to_node(ctx, &opts.state, node.as_str())
-                .await?
+            BackgroundNodeClient::create_to_node(ctx, &opts.state, node.as_str())?
                 .send_message(ctx, &to, msg_bytes, Some(self.timeout.timeout))
                 .await
                 .map_err(Error::Retry)?

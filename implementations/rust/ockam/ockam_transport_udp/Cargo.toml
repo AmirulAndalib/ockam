@@ -1,6 +1,6 @@
 [package]
 name = "ockam_transport_udp"
-version = "0.61.0"
+version = "0.79.0"
 authors = ["Ockam Developers"]
 autoexamples = false
 categories = [
@@ -18,37 +18,25 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/ockam-network/ockam/implementations/rust/ockam/ockam_transport_udp"
-rust-version = "1.56.0"
+rust-version = "1.70.0"
 description = """
 UDP Transport for the Ockam Routing Protocol.
 """
 
 [features]
 default = ["std"]
-std = ["ockam_macros/std"]
-alloc = []
+std = ["ockam_macros/std", "minicbor/std"]
+alloc = ["minicbor/alloc"]
 
 [dependencies]
-bytes = "1.6.0"
-futures-util = "0.3"
-minicbor = "0.24"
-ockam_core = { path = "../ockam_core", version = "^0.111.0", default_features = false }
-ockam_node = { path = "../ockam_node", version = "^0.119.0" }
-ockam_transport_core = { path = "../ockam_transport_core", version = "^0.84.0" }
+cfg-if = "1.0.0"
+minicbor = { version = "0.25.1", default-features = false, features = ["derive"] }
+ockam_core = { path = "../ockam_core", version = "^0.124.0", default-features = false }
+ockam_node = { path = "../ockam_node", version = "^0.137.0" }
+ockam_transport_core = { path = "../ockam_transport_core", version = "^0.101.0" }
 rand = "0.8"
-tokio = { version = "1.38.0", features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-util"] }
-tokio-util = { version = "0.7.11", features = ["net", "codec"] }
+tokio = { version = "1.41.0", features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-util"] }
 tracing = { version = "0.1", default-features = false }
 
 [dev-dependencies]
-ockam = { path = "../ockam", version = "^0.127.0" }
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0" }
-
-[[example]]
-name = "client"
-
-[[example]]
-name = "echo_server"
-
-[[example]]
-name = "rendezvous_server"
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0" }

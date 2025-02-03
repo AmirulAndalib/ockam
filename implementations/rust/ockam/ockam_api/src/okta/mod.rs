@@ -3,9 +3,9 @@ use crate::error::ApiError;
 use core::str;
 use minicbor::Decoder;
 use ockam::identity::utils::now;
-use ockam::identity::{Identifier, IdentitySecureChannelLocalInfo};
+use ockam::identity::Identifier;
 use ockam_core::api::{Method, RequestHeader, Response};
-use ockam_core::{self, Result, Routed, Worker};
+use ockam_core::{self, Result, Routed, SecureChannelLocalInfo, Worker};
 use ockam_node::Context;
 use reqwest::StatusCode;
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use std::sync::Arc;
 use tracing::trace;
 
 pub struct Server {
+    authority: Identifier,
     member_attributes_repository: Arc<dyn AuthorityMembersRepository>,
     tenant_base_url: String,
     certificate: reqwest::Certificate,
@@ -25,14 +26,14 @@ impl Worker for Server {
     type Message = Vec<u8>;
 
     async fn handle_message(&mut self, c: &mut Context, m: Routed<Self::Message>) -> Result<()> {
-        if let Ok(i) = IdentitySecureChannelLocalInfo::find_info(m.local_message()) {
-            let return_route = m.return_route();
+        if let Ok(i) = SecureChannelLocalInfo::find_info(m.local_message()) {
+            let return_route = m.return_route().clone();
             let reply = self
-                .on_request(&i.their_identity_id(), &m.into_body()?)
+                .on_request(&i.their_identifier().into(), &m.into_body()?)
                 .await?;
             c.send(return_route, reply).await
         } else {
-            let return_route = m.return_route();
+            let return_route = m.return_route().clone();
             let body = m.into_body()?;
             let mut dec = Decoder::new(&body);
             let req: RequestHeader = dec.decode()?;
@@ -44,6 +45,7 @@ impl Worker for Server {
 
 impl Server {
     pub fn new(
+        authority: &Identifier,
         member_attributes_repository: Arc<dyn AuthorityMembersRepository>,
         tenant_base_url: &str,
         certificate: &str,
@@ -52,6 +54,7 @@ impl Server {
         let certificate = reqwest::Certificate::from_pem(certificate.as_bytes())
             .map_err(|err| ApiError::core(err.to_string()))?;
         Ok(Server {
+            authority: authority.clone(),
             member_attributes_repository,
             tenant_base_url: tenant_base_url.to_string(),
             certificate,
@@ -79,7 +82,8 @@ impl Server {
                     debug!("Checking token");
                     // TODO: check token_type
                     // TODO: it's AuthenticateAuth0Token or something else?.  Probably rename.
-                    let token: crate::cloud::enroll::auth0::AuthenticateOidcToken = dec.decode()?;
+                    let token: crate::orchestrator::enroll::auth0::AuthenticateOidcToken =
+                        dec.decode()?;
                     debug!("device code received: {token:#?}");
                     if let Some(attrs) = self.check_token(&token.access_token.0).await? {
                         //TODO in some future, we will want to track that this entry
@@ -93,7 +97,9 @@ impl Server {
 
                         let member =
                             AuthorityMember::new(from.clone(), attrs, from.clone(), now()?, false);
-                        self.member_attributes_repository.add_member(member).await?;
+                        self.member_attributes_repository
+                            .add_member(&self.authority, member)
+                            .await?;
                         Response::ok().with_headers(&req).to_vec()?
                     } else {
                         Response::forbidden(&req, "Forbidden").to_vec()?

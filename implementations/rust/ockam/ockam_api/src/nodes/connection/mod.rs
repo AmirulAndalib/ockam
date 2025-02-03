@@ -1,4 +1,5 @@
 mod plain_tcp;
+mod plain_udp;
 mod project;
 mod secure;
 
@@ -12,14 +13,15 @@ use ockam_multiaddr::{Match, MultiAddr, Protocol};
 use ockam_node::Context;
 
 use crate::error::ApiError;
-use crate::local_multiaddr_to_route;
 use crate::nodes::service::default_address::DefaultAddress;
 use crate::nodes::NodeManager;
+use crate::LocalMultiaddrResolver;
+use ockam::udp::UdpBind;
 pub(crate) use plain_tcp::PlainTcpInstantiator;
+pub(crate) use plain_udp::PlainUdpInstantiator;
 pub(crate) use project::ProjectInstantiator;
 pub(crate) use secure::SecureChannelInstantiator;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Connection {
@@ -37,24 +39,26 @@ pub struct Connection {
     pub(crate) secure_channel_encryptors: Vec<Address>,
     /// A TCP worker address if used when instantiating the connection
     pub(crate) tcp_connection: Option<TcpConnection>,
+    /// A UDP worker address if used when instantiating the connection
+    pub(crate) udp_bind: Option<UdpBind>,
     /// If a flow control was created
     flow_control_id: Option<FlowControlId>,
 }
 
 impl Connection {
     /// Shorthand to add the address as consumer to the flow control
-    pub fn add_consumer(&self, context: Arc<Context>, address: &Address) {
+    pub fn add_consumer(&self, context: &Context, address: &Address) {
         if let Some(flow_control_id) = &self.flow_control_id {
             context
                 .flow_controls()
-                .add_consumer(address.clone(), flow_control_id);
+                .add_consumer(address, flow_control_id);
         }
     }
 
-    pub fn add_default_consumers(&self, ctx: Arc<Context>) {
-        self.add_consumer(ctx.clone(), &DefaultAddress::KEY_EXCHANGER_LISTENER.into());
-        self.add_consumer(ctx.clone(), &DefaultAddress::SECURE_CHANNEL_LISTENER.into());
-        self.add_consumer(ctx.clone(), &DefaultAddress::UPPERCASE_SERVICE.into());
+    pub fn add_default_consumers(&self, ctx: &Context) {
+        self.add_consumer(ctx, &DefaultAddress::KEY_EXCHANGER_LISTENER.into());
+        self.add_consumer(ctx, &DefaultAddress::SECURE_CHANNEL_LISTENER.into());
+        self.add_consumer(ctx, &DefaultAddress::UPPERCASE_SERVICE.into());
         self.add_consumer(ctx, &DefaultAddress::ECHO_SERVICE.into());
     }
 
@@ -63,7 +67,7 @@ impl Connection {
     }
 
     pub fn route(&self) -> Result<Route> {
-        local_multiaddr_to_route(&self.normalized_addr).map_err(|_| {
+        LocalMultiaddrResolver::resolve(&self.normalized_addr).map_err(|_| {
             ApiError::core(format!(
                 "Couldn't convert MultiAddr to route: normalized_addr={}",
                 self.normalized_addr
@@ -71,9 +75,9 @@ impl Connection {
         })
     }
 
-    pub async fn close(&self, context: &Context, node_manager: &NodeManager) -> Result<()> {
+    pub fn close(&self, context: &Context, node_manager: &NodeManager) -> Result<()> {
         for encryptor in &self.secure_channel_encryptors {
-            if let Err(error) = node_manager.delete_secure_channel(context, encryptor).await {
+            if let Err(error) = node_manager.delete_secure_channel(context, encryptor) {
                 match error.code().kind {
                     Kind::NotFound => {
                         debug!("cannot find and delete secure channel `{encryptor}`: {error}");
@@ -92,10 +96,33 @@ impl Connection {
 
         if let Some(tcp_connection) = self.tcp_connection.as_ref() {
             let address = tcp_connection.sender_address().clone();
-            if let Err(error) = node_manager.tcp_transport.disconnect(address.clone()).await {
+            if let Err(error) = node_manager.tcp_transport.disconnect(&address) {
                 match error.code().kind {
                     Kind::NotFound => {
                         debug!("cannot find and disconnect tcp worker `{tcp_connection}`");
+                    }
+                    _ => Err(ockam_core::Error::new(
+                        Origin::Node,
+                        Kind::Internal,
+                        format!("Failed to remove inlet with alias {address}. {}", error),
+                    ))?,
+                }
+            }
+        }
+
+        if let Some(udp_bind) = self.udp_bind.as_ref() {
+            let address = udp_bind.sender_address();
+            if let Err(error) = node_manager
+                .udp_transport
+                .as_ref()
+                .ok_or_else(|| {
+                    ockam_core::Error::new(Origin::Node, Kind::Internal, "UDP transport is missing")
+                })?
+                .unbind(address)
+            {
+                match error.code().kind {
+                    Kind::NotFound => {
+                        debug!("cannot find and disconnect udp worker `{udp_bind}`");
                     }
                     _ => Err(ockam_core::Error::new(
                         Origin::Node,
@@ -135,6 +162,7 @@ pub(crate) struct ConnectionBuilder {
     pub(crate) flow_control_id: Option<FlowControlId>,
     pub(crate) secure_channel_encryptors: Vec<Address>,
     pub(crate) tcp_connection: Option<TcpConnection>,
+    pub(crate) udp_bind: Option<UdpBind>,
 }
 
 impl Debug for ConnectionBuilder {
@@ -164,6 +192,8 @@ pub struct Changes {
     pub secure_channel_encryptors: Vec<Address>,
     /// Optional, to keep track of tcp worker when created for the connection
     pub tcp_connection: Option<TcpConnection>,
+    /// Optional, to keep track of tcp worker when created for the connection
+    pub udp_bind: Option<UdpBind>,
 }
 
 /// Takes in a [`MultiAddr`] and instantiate it, can be implemented for any protocol.
@@ -182,7 +212,7 @@ pub trait Instantiator: Send + Sync + 'static {
     /// The returned [`Changes`] will be used to update the builder state.
     async fn instantiate(
         &self,
-        ctx: Arc<Context>,
+        ctx: &Context,
         node_manager: &NodeManager,
         transport_route: Route,
         extracted: (MultiAddr, MultiAddr, MultiAddr),
@@ -198,6 +228,7 @@ impl ConnectionBuilder {
             secure_channel_encryptors: vec![],
             flow_control_id: None,
             tcp_connection: None,
+            udp_bind: None,
         }
     }
 
@@ -208,6 +239,7 @@ impl ConnectionBuilder {
             original_addr: self.original_multiaddr,
             secure_channel_encryptors: self.secure_channel_encryptors,
             tcp_connection: self.tcp_connection,
+            udp_bind: self.udp_bind,
             flow_control_id: self.flow_control_id,
         }
     }
@@ -217,7 +249,7 @@ impl ConnectionBuilder {
     /// user make sure higher protocol abstraction are called before lower level ones
     pub async fn instantiate(
         mut self,
-        ctx: Arc<Context>,
+        ctx: &Context,
         node_manager: &NodeManager,
         instantiator: impl Instantiator,
     ) -> Result<Self, ockam_core::Error> {
@@ -233,14 +265,14 @@ impl ConnectionBuilder {
                     // the transport route should include only the pieces before the match
                     self.transport_route = self
                         .recalculate_transport_route(
-                            &ctx,
+                            ctx,
                             self.current_multiaddr.split(start).0,
                             false,
                         )
                         .await?;
                     let mut changes = instantiator
                         .instantiate(
-                            ctx.clone(),
+                            ctx,
                             node_manager,
                             self.transport_route.clone(),
                             self.extract(start, instantiator.matches().len()),
@@ -256,10 +288,21 @@ impl ConnectionBuilder {
                             return Err(ockam_core::Error::new(
                                 Origin::Transport,
                                 Kind::Unsupported,
-                                "multiple tcp connections created in a `MultiAddr`",
+                                "multiple transport connections created in a `MultiAddr`",
                             ));
                         }
                         self.tcp_connection = changes.tcp_connection;
+                    }
+
+                    if changes.udp_bind.is_some() {
+                        if self.udp_bind.is_some() {
+                            return Err(ockam_core::Error::new(
+                                Origin::Transport,
+                                Kind::Unsupported,
+                                "multiple transport connections created in a `MultiAddr`",
+                            ));
+                        }
+                        self.udp_bind = changes.udp_bind;
                     }
 
                     if changes.flow_control_id.is_some() {
@@ -271,17 +314,10 @@ impl ConnectionBuilder {
         }
 
         self.transport_route = self
-            .recalculate_transport_route(&ctx, self.current_multiaddr.clone(), true)
+            .recalculate_transport_route(ctx, self.current_multiaddr.clone(), true)
             .await?;
 
-        Ok(Self {
-            original_multiaddr: self.original_multiaddr,
-            transport_route: self.transport_route,
-            secure_channel_encryptors: self.secure_channel_encryptors,
-            current_multiaddr: self.current_multiaddr,
-            flow_control_id: self.flow_control_id,
-            tcp_connection: self.tcp_connection,
-        })
+        Ok(self)
     }
 
     /// Calculate a 'transport route' from the [`MultiAddr`]
@@ -298,7 +334,7 @@ impl ConnectionBuilder {
         while let Some(protocol) = peekable.next() {
             if protocol.code() == Service::CODE {
                 if let Some(service) = protocol.cast::<Service>() {
-                    let address = Address::new(LOCAL, &*service);
+                    let address = Address::new_with_string(LOCAL, &*service);
                     let is_last = peekable.peek().is_none();
 
                     // we usually want to skip the last entry since it's normally the destination
@@ -307,10 +343,7 @@ impl ConnectionBuilder {
                     // last piece only if it's a terminal (a service connecting to another node)
                     if last_pass && is_last {
                         let is_terminal = ctx
-                            .read_metadata(address.clone())
-                            .await
-                            .ok()
-                            .flatten()
+                            .get_metadata(&address)?
                             .map(|m| m.is_terminal)
                             .unwrap_or(false);
 

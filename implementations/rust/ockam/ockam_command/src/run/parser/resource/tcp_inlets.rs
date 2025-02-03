@@ -8,7 +8,7 @@ use crate::run::parser::resource::utils::parse_cmd_from_args;
 use crate::tcp::inlet::create::CreateCommand;
 use crate::{tcp::inlet, Command, OckamSubcommand};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TcpInlets {
     #[serde(alias = "tcp-inlets", alias = "tcp-inlet")]
     pub tcp_inlets: Option<ResourceNameOrMap>,
@@ -33,8 +33,7 @@ impl TcpInlets {
     ) -> Result<Vec<CreateCommand>> {
         match self.tcp_inlets {
             Some(c) => {
-                let mut cmds =
-                    c.into_commands_with_name_arg(Self::get_subcommand, Some("alias"))?;
+                let mut cmds = c.into_commands(Self::get_subcommand)?;
                 if let Some(node_name) = default_node_name.as_ref() {
                     for cmd in cmds.iter_mut() {
                         if cmd.at.is_none() {
@@ -51,10 +50,8 @@ impl TcpInlets {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-    use std::str::FromStr;
-
     use super::*;
+    use ockam::transport::SchemeHostnamePort;
 
     #[test]
     fn tcp_inlet_config() {
@@ -65,7 +62,6 @@ mod tests {
                 at: n
               ti2:
                 from: '6061'
-                alias: my_inlet
         "#;
         let parsed: TcpInlets = serde_yaml::from_str(named).unwrap();
         let default_node_name = "n1".to_string();
@@ -73,16 +69,16 @@ mod tests {
             .into_parsed_commands(Some(&default_node_name))
             .unwrap();
         assert_eq!(cmds.len(), 2);
-        assert_eq!(cmds[0].alias, "ti1");
+        assert_eq!(cmds[0].name.as_ref().unwrap(), "ti1");
         assert_eq!(
             cmds[0].from,
-            SocketAddr::from_str("127.0.0.1:6060").unwrap()
+            SchemeHostnamePort::new("tcp", "127.0.0.1", 6060).unwrap()
         );
         assert_eq!(cmds[0].at.as_ref().unwrap(), "n");
-        assert_eq!(cmds[1].alias, "my_inlet");
+        assert_eq!(cmds[1].name.as_ref().unwrap(), "ti2");
         assert_eq!(
             cmds[1].from,
-            SocketAddr::from_str("127.0.0.1:6061").unwrap()
+            SchemeHostnamePort::new("tcp", "127.0.0.1", 6061).unwrap()
         );
         assert_eq!(cmds[1].at.as_ref(), Some(&default_node_name));
 
@@ -99,12 +95,12 @@ mod tests {
         assert_eq!(cmds.len(), 2);
         assert_eq!(
             cmds[0].from,
-            SocketAddr::from_str("127.0.0.1:6060").unwrap()
+            SchemeHostnamePort::new("tcp", "127.0.0.1", 6060).unwrap()
         );
         assert_eq!(cmds[0].at.as_ref().unwrap(), "n");
         assert_eq!(
             cmds[1].from,
-            SocketAddr::from_str("127.0.0.1:6061").unwrap()
+            SchemeHostnamePort::new("tcp", "127.0.0.1", 6061).unwrap()
         );
         assert_eq!(cmds[1].at.as_ref(), Some(&default_node_name));
     }

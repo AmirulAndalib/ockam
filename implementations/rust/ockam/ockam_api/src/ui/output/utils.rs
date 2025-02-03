@@ -1,14 +1,14 @@
-use crate::colors::OckamColor;
-use crate::ConnectionStatus;
-use colorful::core::color_string::CString;
-use colorful::Colorful;
 use ockam::identity::TimestampInSeconds;
 
 pub fn comma_separated<T: AsRef<str>>(data: &[T]) -> String {
-    data.iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<_>>()
-        .join(", ")
+    if data.is_empty() {
+        "-".to_string()
+    } else {
+        data.iter()
+            .map(AsRef::as_ref)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 pub fn human_readable_time(time: TimestampInSeconds) -> String {
@@ -35,15 +35,6 @@ pub fn human_readable_time(time: TimestampInSeconds) -> String {
             "unix time is invalid",
         ))
         .to_string(),
-    }
-}
-
-pub fn colorize_connection_status(status: ConnectionStatus) -> CString {
-    let text = status.to_string();
-    match status {
-        ConnectionStatus::Up => text.color(OckamColor::PrimaryResource.color()),
-        ConnectionStatus::Down => text.color(OckamColor::Failure.color()),
-        ConnectionStatus::Degraded => text.color(OckamColor::Failure.color()),
     }
 }
 

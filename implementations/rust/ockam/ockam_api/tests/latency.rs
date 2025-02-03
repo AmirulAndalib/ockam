@@ -13,6 +13,7 @@ use ockam_core::env::FromString;
 use ockam_core::errcode::{Kind, Origin};
 use ockam_core::{route, Address, AllowAll, Error, NeutralMessage};
 use ockam_multiaddr::MultiAddr;
+use ockam_transport_core::HostnamePort;
 
 /// These tests serve as a benchmark for the message roundtrip latency.
 /// In order for the result to be reliable, use the --profile release
@@ -23,7 +24,7 @@ use ockam_multiaddr::MultiAddr;
 pub fn measure_message_latency_two_nodes() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<()> = runtime_cloned.block_on(async move {
         let test_body = async move {
@@ -63,7 +64,7 @@ pub fn measure_message_latency_two_nodes() {
                 first_node
                     .context
                     .flow_controls()
-                    .add_consumer(first_node.context.address(), &flow_control_id);
+                    .add_consumer(first_node.context.primary_address(), &flow_control_id);
             }
 
             let payload = NeutralMessage::from(vec![1, 2, 3, 4]);
@@ -101,8 +102,8 @@ pub fn measure_message_latency_two_nodes() {
                 elapsed.div_f32(10_000f32)
             );
 
-            first_node.context.stop().await?;
-            second_node.context.stop().await?;
+            first_node.context.shutdown_node().await?;
+            second_node.context.shutdown_node().await?;
 
             Ok(())
         };
@@ -119,7 +120,7 @@ pub fn measure_message_latency_two_nodes() {
 pub fn measure_buffer_latency_two_nodes_portal() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<()> = runtime_cloned.block_on(async move {
         let test_body = async move {
@@ -138,6 +139,7 @@ pub fn measure_buffer_latency_two_nodes_portal() {
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
                 )
                 .await?;
 
@@ -148,7 +150,7 @@ pub fn measure_buffer_latency_two_nodes_portal() {
                 .node_manager
                 .create_inlet(
                     &first_node.context,
-                    "127.0.0.1:0".to_string(),
+                    HostnamePort::localhost(0),
                     route![],
                     route![],
                     second_node_listen_address
@@ -162,6 +164,8 @@ pub fn measure_buffer_latency_two_nodes_portal() {
                     None,
                     false,
                     false,
+                    false,
+                    None,
                 )
                 .await?;
 
@@ -190,8 +194,8 @@ pub fn measure_buffer_latency_two_nodes_portal() {
                 elapsed.div_f32(10_000f32)
             );
 
-            first_node.context.stop().await?;
-            second_node.context.stop().await?;
+            first_node.context.shutdown_node().await?;
+            second_node.context.shutdown_node().await?;
 
             Ok(())
         };

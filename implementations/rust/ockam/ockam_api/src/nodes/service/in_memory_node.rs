@@ -4,23 +4,26 @@ use std::time::Duration;
 use futures::executor;
 use miette::IntoDiagnostic;
 
-use ockam::identity::SecureChannels;
+use ockam::identity::models::ChangeHistory;
+use ockam::identity::{Identifier, SecureChannels};
 use ockam::tcp::{TcpListenerOptions, TcpTransport};
 use ockam::{Context, Result};
 use ockam_core::compat::{string::String, sync::Arc};
 use ockam_core::errcode::Kind;
 use ockam_multiaddr::MultiAddr;
 
-use crate::cli_state::journeys::{NODE_NAME, USER_EMAIL, USER_NAME};
 use crate::cli_state::random_name;
 use crate::cli_state::CliState;
-use crate::cloud::ControllerClient;
-use crate::logs::CurrentSpan;
+use crate::nodes::models::transport::Port;
 use crate::nodes::service::default_address::DefaultAddress;
 use crate::nodes::service::{
     NodeManagerGeneralOptions, NodeManagerTransportOptions, NodeManagerTrustOptions,
 };
 use crate::nodes::{NodeManager, NODEMANAGER_ADDR};
+use crate::orchestrator::project::Project;
+use crate::orchestrator::{
+    AuthorityNodeClient, ControllerClient, CredentialsEnabled, ProjectNodeClient,
+};
 
 /// An `InMemoryNode` represents a full running node
 /// In addition to a `NodeManager`, which is used to handle all the entities related to a node
@@ -57,14 +60,17 @@ impl Drop for InMemoryNode {
         // stops. Except if they have been started with the `ockam node create` command
         // because in that case they can be restarted
         if !self.persistent {
+            // TODO: Should be a better way to do that, e.g. send a signal to a background async
+            //  task to do the job, or shutdown the node manually before dropping this value
             executor::block_on(async {
-                // We need to recreate the CliState here to make sure that
-                // we get a fresh connection to the database (otherwise this code blocks)
-                let cli_state = CliState::create(self.cli_state.dir()).await.unwrap();
-                cli_state
-                    .remove_node(&self.node_name)
-                    .await
-                    .unwrap_or_else(|e| panic!("cannot delete the node {}: {e:?}", self.node_name));
+                let result = self.cli_state.remove_node(&self.node_name).await;
+                if let Err(err) = result {
+                    // code: 1032 maps to SQLITE_READONLY_DBMOVED - meaning the database has been
+                    // moved to another directory, most likely already deleted
+                    if !err.to_string().contains("code: 1032") {
+                        error!("Cannot delete the node {}: {err:?}", self.node_name);
+                    }
+                }
             });
         }
     }
@@ -98,8 +104,8 @@ impl InMemoryNode {
         .await
     }
 
-    /// Start an in memory node with some project and identity
-    pub async fn start_with_project_name_and_identity(
+    /// Start an in memory node with some identity and project
+    pub async fn start_with_identity_and_project_name(
         ctx: &Context,
         cli_state: &CliState,
         identity: Option<String>,
@@ -113,9 +119,10 @@ impl InMemoryNode {
     pub async fn start_with_identity(
         ctx: &Context,
         cli_state: &CliState,
-        identity_name: &str,
+        identity: Option<String>,
     ) -> miette::Result<InMemoryNode> {
-        Self::start_node(ctx, cli_state, identity_name, None, None, None, None).await
+        let identity = cli_state.get_identity_name_or_default(&identity).await?;
+        Self::start_node(ctx, cli_state, &identity, None, None, None, None).await
     }
 
     /// Start an in memory node
@@ -124,14 +131,14 @@ impl InMemoryNode {
         ctx: &Context,
         cli_state: &CliState,
         identity_name: &str,
-        http_server_port: Option<u16>,
+        status_endpoint_port: Option<Port>,
         project_name: Option<String>,
-        authority_identity: Option<String>,
+        authority_identity: Option<ChangeHistory>,
         authority_route: Option<MultiAddr>,
     ) -> miette::Result<InMemoryNode> {
         let defaults = NodeManagerDefaults::default();
 
-        let tcp = TcpTransport::create(ctx).await.into_diagnostic()?;
+        let tcp = TcpTransport::create(ctx).into_diagnostic()?;
         let tcp_listener = tcp
             .listen(
                 defaults.tcp_listener_address.as_str(),
@@ -144,7 +151,6 @@ impl InMemoryNode {
             .start_node_with_optional_values(
                 &defaults.node_name,
                 &Some(identity_name.to_string()),
-                &project_name,
                 Some(&tcp_listener),
             )
             .await
@@ -161,30 +167,17 @@ impl InMemoryNode {
                 cli_state.clone(),
                 node.name(),
                 false,
-                http_server_port,
+                status_endpoint_port,
                 false,
             ),
-            NodeManagerTransportOptions::new(tcp_listener.flow_control_id().clone(), tcp, None),
+            NodeManagerTransportOptions::new_tcp(tcp_listener.flow_control_id().clone(), tcp),
             trust_options,
         )
         .await
         .into_diagnostic()?;
         ctx.flow_controls()
-            .add_consumer(NODEMANAGER_ADDR, tcp_listener.flow_control_id());
+            .add_consumer(&NODEMANAGER_ADDR.into(), tcp_listener.flow_control_id());
         Ok(node_manager)
-    }
-
-    /// Return a Controller client to send requests to the Controller
-    pub async fn create_controller(&self) -> miette::Result<ControllerClient> {
-        if let Ok(user) = self.cli_state.get_default_user().await {
-            CurrentSpan::set_attribute(USER_NAME, &user.name);
-            CurrentSpan::set_attribute(USER_EMAIL, &user.email.to_string());
-        }
-        CurrentSpan::set_attribute(NODE_NAME, &self.node_manager.node_name);
-
-        self.create_controller_client(self.timeout)
-            .await
-            .into_diagnostic()
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -193,9 +186,16 @@ impl InMemoryNode {
     }
 
     pub async fn stop(&self, ctx: &Context) -> Result<()> {
-        self.medic_handle.stop_medic(ctx).await?;
+        for session in self.registry.inlets.values() {
+            session.session.lock().await.stop().await;
+        }
+
+        for session in self.registry.relays.values() {
+            session.session.lock().await.stop().await;
+        }
+
         for addr in DefaultAddress::iter() {
-            let result = ctx.stop_worker(addr).await;
+            let result = ctx.stop_address(&addr.into());
             // when stopping we can safely ignore missing services
             if let Err(err) = result {
                 if err.code().kind == Kind::NotFound {
@@ -205,6 +205,7 @@ impl InMemoryNode {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -229,6 +230,87 @@ impl InMemoryNode {
     pub fn secure_channels(&self) -> Arc<SecureChannels> {
         self.secure_channels.clone()
     }
+
+    /// Return a Controller client to send requests to the Controller
+    pub async fn create_controller(&self) -> miette::Result<ControllerClient> {
+        let client = self.node_manager.create_controller().await?;
+        if let Some(timeout) = self.timeout {
+            Ok(client
+                .with_request_timeout(&timeout)
+                .with_secure_channel_timeout(&timeout))
+        } else {
+            Ok(client)
+        }
+    }
+
+    pub async fn create_authority_client_with_project(
+        &self,
+        ctx: &Context,
+        project: &Project,
+        caller_identity_name: Option<String>,
+    ) -> miette::Result<AuthorityNodeClient> {
+        let client = self
+            .node_manager
+            .create_authority_client_with_project(ctx, project, caller_identity_name)
+            .await?;
+        if let Some(timeout) = self.timeout {
+            Ok(client
+                .with_request_timeout(&timeout)
+                .with_secure_channel_timeout(&timeout))
+        } else {
+            Ok(client)
+        }
+    }
+
+    pub async fn create_authority_client_with_authority(
+        &self,
+        ctx: &Context,
+        authority_identifier: &Identifier,
+        authority_route: &MultiAddr,
+        caller_identity_name: Option<String>,
+    ) -> miette::Result<AuthorityNodeClient> {
+        let client = self
+            .node_manager
+            .create_authority_client_with_authority(
+                ctx,
+                authority_identifier,
+                authority_route,
+                caller_identity_name,
+            )
+            .await?;
+        if let Some(timeout) = self.timeout {
+            Ok(client
+                .with_request_timeout(&timeout)
+                .with_secure_channel_timeout(&timeout))
+        } else {
+            Ok(client)
+        }
+    }
+
+    pub async fn create_project_client(
+        &self,
+        project_identifier: &Identifier,
+        project_multiaddr: &MultiAddr,
+        caller_identity_name: Option<String>,
+        credentials_enabled: CredentialsEnabled,
+    ) -> miette::Result<ProjectNodeClient> {
+        let client = self
+            .node_manager
+            .create_project_client(
+                project_identifier,
+                project_multiaddr,
+                caller_identity_name,
+                credentials_enabled,
+            )
+            .await?;
+        if let Some(timeout) = self.timeout {
+            Ok(client
+                .with_request_timeout(&timeout)
+                .with_secure_channel_timeout(&timeout))
+        } else {
+            Ok(client)
+        }
+    }
 }
 
 pub struct NodeManagerDefaults {
@@ -242,5 +324,24 @@ impl Default for NodeManagerDefaults {
             node_name: random_name(),
             tcp_listener_address: "127.0.0.1:0".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[ockam::test]
+    async fn test_start_twice(ctx: &mut Context) -> Result<()> {
+        let cli = CliState::test().await?;
+
+        let node_manager1 = InMemoryNode::start(ctx, &cli).await;
+        assert!(node_manager1.is_ok());
+
+        let node_manager2 = InMemoryNode::start(ctx, &cli).await;
+        if let Err(e) = node_manager2 {
+            panic!("cannot start the node manager a second time: {e:?}");
+        }
+        Ok(())
     }
 }

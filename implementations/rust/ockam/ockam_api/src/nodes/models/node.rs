@@ -7,7 +7,7 @@ use crate::nodes::models::services::ServiceStatus;
 use crate::nodes::models::transport::TransportStatus;
 use crate::output::Output;
 use crate::terminal::fmt;
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use ockam::identity::{Identifier, SecureChannelListener};
 use ockam_core::Result;
 use ockam_multiaddr::MultiAddr;
@@ -17,21 +17,25 @@ use crate::config::lookup::InternetAddress;
 use std::fmt::{Display, Formatter};
 
 /// Response body for a node status request
-#[derive(Debug, Clone, Serialize, Decode, Encode)]
+#[derive(Debug, Clone, Serialize, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct NodeStatus {
     #[n(1)] pub name: String,
     #[n(2)] pub identifier: Identifier,
-    #[n(3)] pub status: NodeProcessStatus,
+    #[n(3)] pub process_status: NodeProcessStatus,
 }
 
 impl NodeStatus {
-    pub fn new(name: impl Into<String>, identifier: Identifier, status: NodeProcessStatus) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        identifier: Identifier,
+        process_status: NodeProcessStatus,
+    ) -> Self {
         Self {
             name: name.into(),
             identifier,
-            status,
+            process_status,
         }
     }
 }
@@ -41,12 +45,12 @@ impl From<&NodeInfo> for NodeStatus {
         Self {
             name: node.name(),
             identifier: node.identifier(),
-            status: node.status(),
+            process_status: node.status(),
         }
     }
 }
 
-#[derive(Debug, Serialize, Decode, Encode)]
+#[derive(Debug, Serialize, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct NodeResources {
@@ -56,7 +60,7 @@ pub struct NodeResources {
     #[serde(flatten)]
     #[n(4)] pub status: NodeProcessStatus,
     #[n(5)] pub route: RouteToNode,
-    #[n(6)] pub http_server_address: Option<InternetAddress>,
+    #[n(6)] pub status_endpoint_address: Option<InternetAddress>,
     #[n(7)] pub transports: Vec<TransportStatus>,
     #[n(8)] pub secure_channel_listeners: Vec<SecureChannelListener>,
     #[n(9)] pub inlets: Vec<InletStatus>,
@@ -84,7 +88,7 @@ impl NodeResources {
                 short: node.route()?,
                 verbose: node.verbose_route()?,
             },
-            http_server_address: node.http_server_address(),
+            status_endpoint_address: node.status_endpoint_address(),
             transports,
             secure_channel_listeners: listeners,
             inlets,
@@ -103,7 +107,7 @@ impl NodeResources {
                 short: node.route()?,
                 verbose: node.verbose_route()?,
             },
-            http_server_address: None,
+            status_endpoint_address: None,
             transports: vec![],
             secure_channel_listeners: vec![],
             inlets: vec![],
@@ -123,10 +127,10 @@ impl Display for NodeResources {
 
         writeln!(f, "{}{}{}", fmt::PADDING, fmt::INDENTATION, self.status)?;
         writeln!(f, "{}{}{}", fmt::PADDING, fmt::INDENTATION, self.route)?;
-        if let Some(http_server) = self.http_server_address.as_ref() {
+        if let Some(http_server) = self.status_endpoint_address.as_ref() {
             writeln!(
                 f,
-                "{}{}HTTP server listening at {}",
+                "{}{}Status endpoint listening at {}",
                 fmt::PADDING,
                 fmt::INDENTATION,
                 color_primary(http_server.to_string())
@@ -170,7 +174,7 @@ impl Display for NodeResources {
         } else {
             writeln!(f, "{}{}Portals:", fmt::PADDING, fmt::INDENTATION)?;
             for i in &self.inlets {
-                writeln!(f, "{}{}{}", fmt::PADDING, fmt::INDENTATION.repeat(2), i)?;
+                writeln!(f, "{}", i.iter_output().pad().indent().indent())?;
             }
 
             for o in &self.outlets {
@@ -191,7 +195,7 @@ impl Display for NodeResources {
     }
 }
 
-#[derive(Debug, Serialize, Decode, Encode)]
+#[derive(Debug, Serialize, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct RouteToNode {

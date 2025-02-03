@@ -1,16 +1,18 @@
 use clap::{Args, Subcommand};
-use miette::IntoDiagnostic;
-
-pub use create::CreateCommand;
-pub use list::ListCommand;
-use ockam_api::cloud::{CredentialsEnabled, ProjectNodeClient};
-use ockam_api::nodes::InMemoryNode;
-pub use show::ShowCommand;
-
-use crate::shared_args::{IdentityOpts, TrustOpts};
-use crate::CommandGlobalOpts;
 
 use self::revoke::RevokeCommand;
+use crate::util::process_nodes_multiaddr;
+use crate::{Command, CommandGlobalOpts, Error};
+pub use create::CreateCommand;
+pub use list::ListCommand;
+pub use show::ShowCommand;
+
+use miette::IntoDiagnostic;
+use std::str::FromStr;
+
+use ockam_api::CliState;
+use ockam_multiaddr::MultiAddr;
+use ockam_node::Context;
 
 mod create;
 mod list;
@@ -22,12 +24,6 @@ mod show;
 pub struct LeaseCommand {
     #[command(subcommand)]
     subcommand: LeaseSubcommand,
-
-    #[command(flatten)]
-    identity_opts: IdentityOpts,
-
-    #[command(flatten)]
-    trust_opts: TrustOpts,
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -39,12 +35,12 @@ pub enum LeaseSubcommand {
 }
 
 impl LeaseCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         match self.subcommand {
-            LeaseSubcommand::Create(c) => c.run(opts, self.identity_opts, self.trust_opts),
-            LeaseSubcommand::List(c) => c.run(opts, self.identity_opts, self.trust_opts),
-            LeaseSubcommand::Show(c) => c.run(opts, self.identity_opts, self.trust_opts),
-            LeaseSubcommand::Revoke(c) => c.run(opts, self.identity_opts, self.trust_opts),
+            LeaseSubcommand::Create(c) => c.run(ctx, opts).await,
+            LeaseSubcommand::List(c) => c.run(ctx, opts).await,
+            LeaseSubcommand::Show(c) => c.run(ctx, opts).await,
+            LeaseSubcommand::Revoke(c) => c.run(ctx, opts).await,
         }
     }
 
@@ -58,35 +54,26 @@ impl LeaseCommand {
     }
 }
 
-async fn create_project_client(
-    ctx: &ockam_node::Context,
-    opts: &CommandGlobalOpts,
-    identity_opts: &IdentityOpts,
-    trust_opts: &TrustOpts,
-) -> miette::Result<ProjectNodeClient> {
-    let node = InMemoryNode::start_with_project_name_and_identity(
-        ctx,
-        &opts.state,
-        identity_opts.identity_name.clone(),
-        trust_opts.project_name.clone(),
-    )
-    .await?;
+fn lease_at_default_value() -> MultiAddr {
+    // Backwards compatibility with the service running on the project node
+    MultiAddr::from_str("/project/<default_project_name>/service/influxdb_token_lease")
+        .expect("Invalid default value for at")
+}
 
-    let identity = opts
-        .state
-        .get_identity_name_or_default(&identity_opts.identity_name)
-        .await?;
-    let project = opts
-        .state
-        .projects()
-        .get_project_by_name_or_default(&trust_opts.project_name)
-        .await?;
+async fn resolve_at_arg(at: &MultiAddr, state: &CliState) -> miette::Result<MultiAddr> {
+    let mut at = at.to_string();
+    if at.contains("<default_project_name>") {
+        let project_name = state
+            .projects()
+            .get_default_project()
+            .await
+            .map(|p| p.name().to_string())
+            .ok()
+            .ok_or(Error::arg_validation("at", &at, Some("No projects found")))?;
+        at = at.replace("<default_project_name>", &project_name);
+    }
 
-    node.create_project_client(
-        &project.project_identifier().into_diagnostic()?,
-        project.project_multiaddr().into_diagnostic()?,
-        Some(identity.clone()),
-        CredentialsEnabled::On,
-    )
-    .await
+    // Parse "to" as a multiaddr again with all the values in place
+    let to = MultiAddr::from_str(&at).into_diagnostic()?;
+    process_nodes_multiaddr(&to, state).await
 }

@@ -4,11 +4,11 @@ use miette::{miette, IntoDiagnostic};
 use ockam::identity::utils::AttributesBuilder;
 use ockam::identity::Identifier;
 use ockam_api::authenticator::credential_issuer::PROJECT_MEMBER_SCHEMA;
-use ockam_api::output::EncodeFormat;
+use ockam_api::output::{EncodeFormat, Output};
 use ockam_core::compat::collections::HashMap;
 
+use crate::credential::CredentialOutput;
 use crate::output::CredentialAndPurposeKeyDisplay;
-use crate::util::async_cmd;
 use crate::util::parsers::duration_parser;
 use crate::{util::parsers::identity_identifier_parser, CommandGlobalOpts, Result};
 
@@ -40,12 +40,6 @@ pub struct IssueCommand {
 }
 
 impl IssueCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |_ctx| async move {
-            self.async_run(opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "credential issue".into()
     }
@@ -61,7 +55,7 @@ impl IssueCommand {
         Ok(attributes)
     }
 
-    async fn async_run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
         let authority = opts
             .state
             .get_identifier_by_optional_name(&self.as_identity)
@@ -89,8 +83,16 @@ impl IssueCommand {
             .await
             .into_diagnostic()?;
 
-        self.encode_format
-            .println_value(&CredentialAndPurposeKeyDisplay(credential))?;
+        let machine = self
+            .encode_format
+            .encode_value(&CredentialAndPurposeKeyDisplay(credential.clone()))?;
+        let output = CredentialOutput::from_credential(credential)?;
+        opts.terminal
+            .stdout()
+            .plain(output.item()?)
+            .json_obj(output)?
+            .machine(machine)
+            .write_line()?;
 
         Ok(())
     }

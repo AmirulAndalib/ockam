@@ -1,21 +1,20 @@
+use async_trait::async_trait;
 use clap::Args;
 use colorful::Colorful;
 use console::Term;
-use miette::IntoDiagnostic;
-
-use crate::{docs, CommandGlobalOpts};
-use ockam::Context;
-use ockam_api::cloud::space::Spaces;
-use ockam_api::colors::OckamColor;
-use ockam_api::nodes::InMemoryNode;
-use ockam_api::terminal::{Terminal, TerminalStream};
-use ockam_api::{color, fmt_ok};
-use ockam_core::AsyncTryClone;
+use std::sync::Arc;
 
 use crate::shared_args::IdentityOpts;
 use crate::terminal::tui::DeleteCommandTui;
 use crate::tui::PluralTerm;
-use crate::util::async_cmd;
+use crate::{docs, Command, CommandGlobalOpts};
+use ockam::Context;
+use ockam_api::colors::OckamColor;
+use ockam_api::nodes::InMemoryNode;
+use ockam_api::orchestrator::space::Spaces;
+use ockam_api::terminal::{Terminal, TerminalStream};
+use ockam_api::{color, fmt_ok};
+use ockam_core::TryClone;
 
 const LONG_ABOUT: &str = include_str!("./static/delete/long_about.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/delete/after_long_help.txt");
@@ -23,6 +22,7 @@ const AFTER_LONG_HELP: &str = include_str!("./static/delete/after_long_help.txt"
 /// Delete a space
 #[derive(Clone, Debug, Args)]
 #[command(
+hide = true,
 long_about = docs::about(LONG_ABOUT),
 after_long_help = docs::after_help(AFTER_LONG_HELP)
 )]
@@ -39,45 +39,34 @@ pub struct DeleteCommand {
     yes: bool,
 }
 
-impl DeleteCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
+#[async_trait]
+impl Command for DeleteCommand {
+    const NAME: &'static str = "space delete";
 
-    pub fn name(&self) -> String {
-        "space delete".into()
-    }
-
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
-        DeleteTui::run(
-            ctx.async_try_clone().await.into_diagnostic()?,
-            opts,
-            self.clone(),
-        )
-        .await
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+        Ok(DeleteTui::run(ctx, opts, self).await?)
     }
 }
 
+#[derive(TryClone)]
 pub struct DeleteTui {
     ctx: Context,
     opts: CommandGlobalOpts,
-    node: InMemoryNode,
+    node: Arc<InMemoryNode>,
     cmd: DeleteCommand,
 }
 
 impl DeleteTui {
     pub async fn run(
-        ctx: Context,
+        ctx: &Context,
         opts: CommandGlobalOpts,
         cmd: DeleteCommand,
     ) -> miette::Result<()> {
-        let node = InMemoryNode::start(&ctx, &opts.state).await?;
+        let node = InMemoryNode::start(ctx, &opts.state).await?;
         let tui = Self {
-            ctx,
+            ctx: ctx.try_clone()?,
             opts,
-            node,
+            node: Arc::new(node),
             cmd,
         };
         tui.delete().await

@@ -1,17 +1,15 @@
 use crate::colors::{color_primary, color_warn};
 use crate::kafka::{ConsumerPublishing, ConsumerResolution};
 use crate::output::Output;
-use crate::terminal::fmt;
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use ockam_abac::PolicyExpression;
-use ockam_core::compat::net::SocketAddr;
 use ockam_core::Address;
 use ockam_multiaddr::MultiAddr;
+use ockam_transport_core::HostnamePort;
 use serde::Serialize;
 use std::fmt::Display;
-use std::fmt::Write;
 
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartServiceRequest<T> {
@@ -36,7 +34,7 @@ impl<T> StartServiceRequest<T> {
     }
 }
 
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct DeleteServiceRequest {
@@ -53,18 +51,18 @@ impl DeleteServiceRequest {
     }
 }
 
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartKafkaOutletRequest {
-    #[n(1)] bootstrap_server_addr: String,
+    #[n(1)] bootstrap_server_addr: HostnamePort,
     #[n(2)] tls: bool,
     #[n(3)] policy_expression: Option<PolicyExpression>,
 }
 
 impl StartKafkaOutletRequest {
     pub fn new(
-        bootstrap_server_addr: String,
+        bootstrap_server_addr: HostnamePort,
         tls: bool,
         policy_expression: Option<PolicyExpression>,
     ) -> Self {
@@ -75,7 +73,7 @@ impl StartKafkaOutletRequest {
         }
     }
 
-    pub fn bootstrap_server_addr(&self) -> String {
+    pub fn bootstrap_server_addr(&self) -> HostnamePort {
         self.bootstrap_server_addr.clone()
     }
 
@@ -88,11 +86,11 @@ impl StartKafkaOutletRequest {
     }
 }
 
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartKafkaInletRequest {
-    #[n(1)] bind_address: SocketAddr,
+    #[n(1)] bind_address: HostnamePort,
     #[n(2)] brokers_port_range: (u16, u16),
     #[n(3)] kafka_outlet_route: MultiAddr,
     #[n(4)] encrypt_content: bool,
@@ -101,15 +99,17 @@ pub struct StartKafkaInletRequest {
     #[n(7)] inlet_policy_expression: Option<PolicyExpression>,
     #[n(8)] consumer_policy_expression: Option<PolicyExpression>,
     #[n(9)] producer_policy_expression: Option<PolicyExpression>,
+    #[n(10)] encrypted_fields: Vec<String>,
 }
 
 impl StartKafkaInletRequest {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        bind_address: SocketAddr,
+        bind_address: HostnamePort,
         brokers_port_range: impl Into<(u16, u16)>,
         kafka_outlet_route: MultiAddr,
         encrypt_content: bool,
+        encrypted_fields: Vec<String>,
         consumer_resolution: ConsumerResolution,
         consumer_publishing: ConsumerPublishing,
         inlet_policy_expression: Option<PolicyExpression>,
@@ -126,11 +126,12 @@ impl StartKafkaInletRequest {
             inlet_policy_expression,
             consumer_policy_expression,
             producer_policy_expression,
+            encrypted_fields,
         }
     }
 
-    pub fn bind_address(&self) -> SocketAddr {
-        self.bind_address
+    pub fn bind_address(&self) -> HostnamePort {
+        self.bind_address.clone()
     }
     pub fn brokers_port_range(&self) -> (u16, u16) {
         self.brokers_port_range
@@ -141,6 +142,10 @@ impl StartKafkaInletRequest {
 
     pub fn encrypt_content(&self) -> bool {
         self.encrypt_content
+    }
+
+    pub fn encrypted_fields(&self) -> Vec<String> {
+        self.encrypted_fields.clone()
     }
 
     pub fn consumer_resolution(&self) -> ConsumerResolution {
@@ -165,7 +170,7 @@ impl StartKafkaInletRequest {
 }
 
 /// Request body when instructing a node to start an Uppercase service
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartUppercaseServiceRequest {
@@ -179,7 +184,7 @@ impl StartUppercaseServiceRequest {
 }
 
 /// Request body when instructing a node to start an Echoer service
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartEchoerServiceRequest {
@@ -193,7 +198,7 @@ impl StartEchoerServiceRequest {
 }
 
 /// Request body when instructing a node to start a Hop service
-#[derive(Debug, Clone, Decode, Encode)]
+#[derive(Debug, Clone, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct StartHopServiceRequest {
@@ -206,7 +211,7 @@ impl StartHopServiceRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Decode, Encode)]
+#[derive(Debug, Clone, Serialize, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct ServiceStatus {
@@ -237,14 +242,6 @@ impl Display for ServiceStatus {
 
 impl Output for ServiceStatus {
     fn item(&self) -> crate::Result<String> {
-        let mut f = String::new();
-        writeln!(f, "{}{}", fmt::PADDING, self)?;
-        Ok(f)
-    }
-
-    fn as_list_item(&self) -> crate::Result<String> {
-        let mut f = String::new();
-        writeln!(f, "{}", self)?;
-        Ok(f)
+        Ok(self.padded_display())
     }
 }

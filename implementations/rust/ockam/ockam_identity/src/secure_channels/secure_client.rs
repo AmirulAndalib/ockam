@@ -101,7 +101,7 @@ impl SecureClient {
         &self.client_identifier
     }
 
-    /// Secure Channel cretion timeout
+    /// Secure Channel creation timeout
     pub fn secure_channel_timeout(&self) -> Duration {
         self.secure_channel_timeout
     }
@@ -109,6 +109,30 @@ impl SecureClient {
     /// Request timeout
     pub fn request_timeout(&self) -> Duration {
         self.request_timeout
+    }
+
+    /// Change the secure channel creation timeout
+    pub fn with_secure_channel_timeout(self, timeout: &Duration) -> Self {
+        Self {
+            secure_channel_timeout: *timeout,
+            ..self
+        }
+    }
+
+    /// Change the request timeout
+    pub fn with_request_timeout(self, timeout: &Duration) -> Self {
+        Self {
+            request_timeout: *timeout,
+            ..self
+        }
+    }
+
+    /// Change the client Identifier
+    pub fn with_client_identifier(self, client_identifier: &Identifier) -> Self {
+        Self {
+            client_identifier: client_identifier.clone(),
+            ..self
+        }
     }
 }
 
@@ -213,10 +237,9 @@ impl SecureClient {
         let response = client.request(ctx, req).await;
         let _ = self
             .secure_channels
-            .stop_secure_channel(ctx, secure_channel.encryptor_address())
-            .await;
+            .stop_secure_channel(ctx, secure_channel.encryptor_address());
         if let Some(transport_address) = transport_address {
-            let _ = self.transport.disconnect(transport_address).await;
+            let _ = self.transport.disconnect(&transport_address);
         }
         // we delay the unwrapping of the response to make sure that the secure channel is
         // properly stopped first
@@ -258,10 +281,9 @@ impl SecureClient {
         let (secure_channel, transport_address) = self.create_secure_channel(ctx).await?;
         let _ = self
             .secure_channels
-            .stop_secure_channel(ctx, secure_channel.encryptor_address())
-            .await;
+            .stop_secure_channel(ctx, secure_channel.encryptor_address());
         if let Some(transport_address) = transport_address {
-            let _ = self.transport.disconnect(transport_address).await;
+            let _ = self.transport.disconnect(&transport_address);
         }
 
         Ok(())

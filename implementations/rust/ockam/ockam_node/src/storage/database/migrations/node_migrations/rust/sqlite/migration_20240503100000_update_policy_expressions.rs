@@ -1,5 +1,5 @@
 use crate::database::migrations::RustMigration;
-use crate::database::{FromSqlxError, ToVoid};
+use crate::database::{FromSqlxError, SqlxDatabase, ToVoid, Version};
 use ockam_core::{async_trait, Result};
 use sqlx::*;
 
@@ -14,19 +14,23 @@ impl RustMigration for UpdatePolicyExpressions {
         Self::name()
     }
 
-    fn version(&self) -> i64 {
+    fn version(&self) -> Version {
         Self::version()
     }
 
-    async fn migrate(&self, connection: &mut AnyConnection) -> Result<bool> {
+    async fn migrate(
+        &self,
+        _legacy_sqlite_database: Option<SqlxDatabase>,
+        connection: &mut AnyConnection,
+    ) -> Result<()> {
         Self::migrate_policy_expressions(connection).await
     }
 }
 
 impl UpdatePolicyExpressions {
     /// Migration version
-    pub fn version() -> i64 {
-        20240503100000
+    pub fn version() -> Version {
+        Version(20240503100000)
     }
 
     /// Migration name
@@ -34,7 +38,7 @@ impl UpdatePolicyExpressions {
         "migration_20240503100000_update_policy_expressions"
     }
 
-    pub(crate) async fn migrate_policy_expressions(connection: &mut AnyConnection) -> Result<bool> {
+    pub(crate) async fn migrate_policy_expressions(connection: &mut AnyConnection) -> Result<()> {
         let mut transaction = Connection::begin(&mut *connection).await.into_core()?;
         query("UPDATE resource_policy SET expression = '(= subject.has_credential \"true\")' WHERE expression = 'subject.has_credential'").execute(&mut *transaction).await.void()?;
         query("UPDATE resource_type_policy SET expression = '(= subject.has_credential \"true\")' WHERE expression = 'subject.has_credential'").execute(&mut *transaction).await.void()?;
@@ -42,7 +46,7 @@ impl UpdatePolicyExpressions {
         // Commit
         transaction.commit().await.void()?;
 
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -61,15 +65,16 @@ mod test {
     async fn test_migration() -> Result<()> {
         // create the database pool and migrate the tables
         let db_file = NamedTempFile::new().unwrap();
+        let db_file = db_file.path();
 
-        let pool = SqlxDatabase::create_sqlite_connection_pool(db_file.path()).await?;
-
-        let mut connection = pool.acquire().await.into_core()?;
+        let pool = SqlxDatabase::create_sqlite_single_connection_pool(db_file).await?;
 
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to_skip_last_rust_migration(&pool, UpdatePolicyExpressions::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // insert some policies
         let policy1 = insert_resource_policy("tcp-outlet");
@@ -82,11 +87,16 @@ mod test {
         policy3.execute(&mut *connection).await.void()?;
         policy4.execute(&mut *connection).await.void()?;
 
+        // SQLite EXCLUSIVE lock needs exactly one connection during the migration
+        drop(connection);
+
         // apply migrations
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to(&pool, UpdatePolicyExpressions::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // check that the update was successful for resource policies
         let rows: Vec<AnyRow> = query("SELECT expression FROM resource_policy")

@@ -2,6 +2,8 @@
 pub const PADDING: &str = "    ";
 /// Left padding for all terminal output that starts with an icon
 pub const ICON_PADDING: &str = "  ";
+/// Left padding for miette errors
+pub const MIETTE_PADDING: &str = "  ";
 /// A two-space indentation for nested terminal output
 pub const INDENTATION: &str = "  ";
 
@@ -33,10 +35,10 @@ macro_rules! fmt_log {
         $crate::terminal::PADDING,
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{}",
         $crate::terminal::PADDING,
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -50,13 +52,13 @@ macro_rules! fmt_ok {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         "✔"
             .color($crate::colors::OckamColor::FmtOKBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -70,13 +72,13 @@ macro_rules! fmt_para {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         "│"
             .color($crate::colors::OckamColor::FmtINFOBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -90,13 +92,13 @@ macro_rules! fmt_list {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         "│"
             .color($crate::colors::OckamColor::FmtLISTBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -109,10 +111,10 @@ macro_rules! fmt_heading {
         $crate::terminal::PADDING,
         "─".repeat($crate::terminal::get_separator_width()).dim().light_gray())
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("\n{}{}\n{}{}",
         $crate::terminal::PADDING,
-        format!($input, $($args),+),
+        format!($input, $($args),*),
         $crate::terminal::PADDING,
         "─".repeat($crate::terminal::get_separator_width()).dim().light_gray())
     };
@@ -142,13 +144,13 @@ macro_rules! fmt_info {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         ">"
             .color($crate::colors::OckamColor::FmtINFOBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -162,13 +164,13 @@ macro_rules! fmt_warn {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         "!"
             .color($crate::colors::OckamColor::FmtWARNBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }
 
@@ -182,12 +184,12 @@ macro_rules! fmt_err {
             .bold(),
         format!($input))
     };
-    ($input:expr, $($args:expr),+) => {
+    ($input:expr $(, $args:expr)* $(,)?) => {
         format!("{}{} {}",
         $crate::terminal::ICON_PADDING,
         "✗"
             .color($crate::colors::OckamColor::FmtERRORBackground.color())
             .bold(),
-        format!($input, $($args),+))
+        format!($input, $($args),*))
     };
 }

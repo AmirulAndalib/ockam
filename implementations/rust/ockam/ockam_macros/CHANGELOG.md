@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.37.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.36.0 - 2024-11-27
+
+### Added
+
+- Remove last usages of `OCKAM_LOG` env var
+- Updated dependencies
+
+## 0.35.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
 ## 0.34.0 - 2024-02-28
 
 ### Added

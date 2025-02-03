@@ -1,14 +1,12 @@
-use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
 use sqlx::*;
 use tracing::debug;
 
+use ockam::transport::HostnamePort;
 use ockam::{Boolean, FromSqlxError, Nullable, SqlxDatabase, ToVoid};
 use ockam_api::nodes::models::portal::OutletStatus;
-use ockam_core::errcode::{Kind, Origin};
-use ockam_core::Error;
 use ockam_core::{async_trait, Address};
 
 use crate::incoming_services::PersistentIncomingService;
@@ -54,14 +52,15 @@ impl ModelStateRepository for ModelStateSqlxDatabase {
         for tcp_outlet_status in &model_state.tcp_outlets {
             let query = query(
                 r#"
-                 INSERT INTO tcp_outlet_status (node_name, socket_addr, worker_addr, payload)
-                 VALUES ($1, $2, $3, $4)
+                 INSERT INTO tcp_outlet_status (node_name, socket_addr, worker_addr, payload, privileged)
+                 VALUES ($1, $2, $3, $4, $5)
                  ON CONFLICT DO NOTHING"#,
             )
             .bind(node_name)
-            .bind(tcp_outlet_status.socket_addr.to_string())
+            .bind(tcp_outlet_status.to.to_string())
             .bind(tcp_outlet_status.worker_addr.to_string())
-            .bind(tcp_outlet_status.payload.as_ref());
+            .bind(tcp_outlet_status.payload.as_ref())
+            .bind(tcp_outlet_status.privileged);
             query.execute(&mut *transaction).await.void()?;
         }
 
@@ -92,7 +91,7 @@ impl ModelStateRepository for ModelStateSqlxDatabase {
 
     async fn load(&self, node_name: &str) -> Result<ModelState> {
         let query1 = query_as(
-            "SELECT socket_addr, worker_addr, payload FROM tcp_outlet_status WHERE node_name = $1",
+            "SELECT socket_addr, worker_addr, payload, privileged FROM tcp_outlet_status WHERE node_name = $1",
         )
         .bind(node_name);
         let result: Vec<TcpOutletStatusRow> =
@@ -121,17 +120,18 @@ struct TcpOutletStatusRow {
     socket_addr: String,
     worker_addr: String,
     payload: Nullable<String>,
+    privileged: Boolean,
 }
 
 impl TcpOutletStatusRow {
     fn tcp_outlet_status(&self) -> Result<OutletStatus> {
-        let socket_addr = SocketAddr::from_str(&self.socket_addr)
-            .map_err(|e| Error::new(Origin::Application, Kind::Serialization, e.to_string()))?;
+        let to = HostnamePort::from_str(&self.socket_addr)?;
         let worker_addr = Address::from_string(&self.worker_addr);
         Ok(OutletStatus {
-            socket_addr,
+            to,
             worker_addr,
             payload: self.payload.to_option(),
+            privileged: self.privileged.to_bool(),
         })
     }
 }
@@ -157,13 +157,13 @@ impl PersistentIncomingServiceRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ockam::with_dbs;
     use ockam_api::nodes::models::portal::OutletStatus;
     use ockam_core::Address;
+    use ockam_node::database::with_sqlite_dbs;
 
     #[tokio::test]
     async fn store_and_load() -> ockam_core::Result<()> {
-        with_dbs(|db| async move {
+        with_sqlite_dbs(|db| async move {
             let repository: Arc<dyn ModelStateRepository> =
                 Arc::new(ModelStateSqlxDatabase::new(db.clone()));
 
@@ -180,6 +180,7 @@ mod tests {
                 "127.0.0.1:1001".parse().unwrap(),
                 Address::from_string("s1"),
                 None,
+                true,
             ));
             // Add an incoming service
             state.add_incoming_service(PersistentIncomingService {
@@ -199,6 +200,7 @@ mod tests {
                     format!("127.0.0.1:100{i}").parse().unwrap(),
                     Address::from_string(format!("s{i}")),
                     None,
+                    true,
                 ));
                 repository.store(node_name, &state).await.unwrap();
             }

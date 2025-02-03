@@ -2,6 +2,7 @@ use ockam_core::bare::{read_slice, write_slice};
 use ockam_core::errcode::{Kind, Origin};
 use ockam_core::{Encodable, Encoded, Message, NeutralMessage};
 use serde::{Deserialize, Serialize};
+use std::convert::TryInto;
 
 /// A command message type for a Portal
 #[derive(Debug, PartialEq, Eq)]
@@ -14,6 +15,9 @@ pub enum PortalMessage<'de> {
     /// or from the target to the Inlet was dropped
     Disconnect,
     /// Message with binary payload and packet counter
+    // TODO: Add route_index. May not be as important as for privileged portals, as regular portals
+    //  require reliable channel anyways. And if PortalMessage is sent over a channel that
+    //  guarantees ordering, we don't need route_index
     Payload(&'de [u8], Option<u16>),
 }
 
@@ -103,9 +107,6 @@ pub enum PortalInternalMessage {
     /// Connection was dropped
     Disconnect,
 }
-
-/// Maximum allowed size for a payload
-pub const MAX_PAYLOAD_SIZE: usize = 48 * 1024;
 
 #[cfg(test)]
 mod test {

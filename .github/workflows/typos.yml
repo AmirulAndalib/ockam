@@ -7,12 +7,12 @@ permissions:
 jobs:
   run:
     name: Spell check with Typos
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout Actions Repository
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Check spelling
-        uses: crate-ci/typos@c16dc8f5b4a7ad6211464ecf136c69c851e8e83c
+        uses: crate-ci/typos@bd36f89fcd3424dcefd442894589e6ee572a59f2
         with:
           config: tools/typos/typos.toml

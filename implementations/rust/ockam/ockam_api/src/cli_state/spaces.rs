@@ -2,7 +2,8 @@ use ockam_core::errcode::{Kind, Origin};
 use ockam_core::Error;
 
 use crate::cli_state::CliState;
-use crate::cloud::space::Space;
+use crate::orchestrator::space::Space;
+use crate::orchestrator::subscription::Subscription;
 
 use super::Result;
 
@@ -13,22 +14,17 @@ impl CliState {
         space_id: &str,
         space_name: &str,
         users: Vec<&str>,
+        subscription: Option<&Subscription>,
     ) -> Result<Space> {
         let repository = self.spaces_repository();
         let space = Space {
             id: space_id.to_string(),
             name: space_name.to_string(),
             users: users.iter().map(|u| u.to_string()).collect(),
+            subscription: subscription.cloned(),
         };
 
         repository.store_space(&space).await?;
-
-        // If there is no previous default space set this space as the default
-        let default_space = repository.get_default_space().await?;
-        if default_space.is_none() {
-            repository.set_default_space(&space.id).await?
-        };
-
         Ok(space)
     }
 
@@ -56,6 +52,14 @@ impl CliState {
         }
     }
 
+    #[instrument(skip_all, fields(name = name))]
+    pub async fn get_space_by_name_or_default(&self, name: &Option<String>) -> Result<Space> {
+        match name {
+            Some(name) => self.get_space_by_name(name.as_str()).await,
+            None => self.get_default_space().await,
+        }
+    }
+
     #[instrument(skip_all)]
     pub async fn get_spaces(&self) -> Result<Vec<Space>> {
         Ok(self.spaces_repository().get_spaces().await?)
@@ -64,19 +68,7 @@ impl CliState {
     #[instrument(skip_all, fields(space_id = space_id))]
     pub async fn delete_space(&self, space_id: &str) -> Result<()> {
         let repository = self.spaces_repository();
-        // delete the space
-        let space_exists = repository.get_space(space_id).await.is_ok();
         repository.delete_space(space_id).await?;
-
-        // set another space as the default space
-        if space_exists {
-            let other_space = repository.get_spaces().await?;
-            if let Some(other_space) = other_space.first() {
-                repository
-                    .set_default_space(&other_space.space_id())
-                    .await?;
-            }
-        }
         Ok(())
     }
 
@@ -89,23 +81,41 @@ impl CliState {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::orchestrator::subscription::SubscriptionName;
+    use ockam_node::database::skip_if_postgres;
 
     #[tokio::test]
     async fn test_cli_spaces() -> Result<()> {
-        let cli = CliState::test().await?;
+        skip_if_postgres(|| async {
+            let cli = CliState::test().await?;
 
-        // the first created space becomes the default
-        let space1 = cli
-            .store_space("1", "name1", vec!["me@ockam.io", "you@ockam.io"])
-            .await?;
-        let result = cli.get_default_space().await?;
-        assert_eq!(result, space1);
+            // the first created space becomes the default
+            let space1 = cli
+                .store_space(
+                    "1",
+                    "name1",
+                    vec!["me@ockam.io", "you@ockam.io"],
+                    Some(&Subscription::new(
+                        SubscriptionName::Gold,
+                        false,
+                        None,
+                        None,
+                        None,
+                    )),
+                )
+                .await?;
+            let result = cli.get_default_space().await?;
+            assert_eq!(result, space1);
 
-        // the store method can be used to update a space
-        let updated_space1 = cli.store_space("1", "name1", vec!["them@ockam.io"]).await?;
-        let result = cli.get_default_space().await?;
-        assert_eq!(result, updated_space1);
+            // the store method can be used to update a space
+            let updated_space1 = cli
+                .store_space("1", "name1", vec!["them@ockam.io"], None)
+                .await?;
+            let result = cli.get_default_space().await?;
+            assert_eq!(result, updated_space1);
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 }

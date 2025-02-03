@@ -1,6 +1,6 @@
 [package]
 name = "ockam_identity"
-version = "0.114.0"
+version = "0.132.0"
 authors = ["Ockam Developers"]
 categories = ["cryptography", "authentication"]
 edition = "2021"
@@ -10,7 +10,7 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/build-trust/ockam/tree/develop/implementations/rust/ockam/ockam_identity"
-rust-version = "1.56.0"
+rust-version = "1.70.0"
 description = """Ockam is a library for building devices that communicate securely, privately
 and trustfully with cloud services and other devices.
 """
@@ -64,44 +64,47 @@ alloc = [
   "ockam_node/alloc",
   "ockam_vault/alloc",
   "hex/alloc",
+  "minicbor/alloc",
   "serde_bare/alloc",
 ]
 
-storage = ["ockam_vault/storage", "sqlx", "tokio-retry"]
+storage = ["ockam_vault/storage", "sqlx", "sqlx-core", "tokio-retry"]
 aws-lc = ["ockam_vault?/aws-lc"]
 rust-crypto = ["ockam_vault?/rust-crypto"]
 
 [dependencies]
-async-trait = "0.1.80"
+async-trait = "0.1.82"
 cfg-if = "1.0.0"
 chrono = { version = "0.4.38", default-features = false }
-delegate = "0.12.0"
+delegate = "0.13.0"
 hex = { version = "0.4", default-features = false }
-minicbor = { version = "0.24.1", features = ["alloc", "derive"] }
-ockam_core = { path = "../ockam_core", version = "^0.111.0", default-features = false }
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0", default-features = false }
-ockam_node = { path = "../ockam_node", version = "^0.119.0", default-features = false }
-ockam_transport_core = { path = "../ockam_transport_core", version = "^0.84.0", default_features = false }
-ockam_vault = { path = "../ockam_vault", version = "^0.112.0", default-features = false, optional = true }
+minicbor = { version = "0.25.1", default-features = false, features = ["derive"] }
+ockam_core = { path = "../ockam_core", version = "^0.124.0", default-features = false }
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0", default-features = false }
+ockam_node = { path = "../ockam_node", version = "^0.137.0", default-features = false }
+ockam_transport_core = { path = "../ockam_transport_core", version = "^0.101.0", default-features = false }
+ockam_vault = { path = "../ockam_vault", version = "^0.130.0", default-features = false, optional = true }
 rand = { version = "0.8", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_bare = { version = "0.5.0", default-features = false, features = ["alloc"] }
 serde_json = { version = "1.0", optional = true }
 sha2 = { version = "0.10", default-features = false }
-sqlx = { git = "https://github.com/etorreborre/sqlx", rev = "5fec648d2de0cbeed738dcf1c6f5bc9194fc439b", optional = true }
+sqlx = { version = "0.8.3", optional = true, default-features = false }
+sqlx-core = { version = "0.8.3", optional = true, default-features = false }
+static_assertions = "1.1.0"
 tokio-retry = { version = "0.3.0", default-features = false, optional = true }
-tracing = { version = "0.1", default_features = false }
-tracing-attributes = { version = "0.1", default_features = false }
+tracing = { version = "0.1", default-features = false }
+tracing-attributes = { version = "0.1", default-features = false }
 
 [dev-dependencies]
-ockam_transport_tcp = { path = "../ockam_transport_tcp", default-features = false }
+ockam_transport_tcp = { path = "../ockam_transport_tcp" }
 ockam_vault = { path = "../ockam_vault" }
 ockam_vault_aws = { path = "../ockam_vault_aws" }
 quickcheck = "1.0.3"
 rand_xorshift = "0"
 serde_json = "1.0"
 tempfile = { version = "3.10.1" }
-tokio = { version = "1.38.0", features = ["full"] }
+tokio = { version = "1.41.0", features = ["full"] }
 zeroize = { version = "1.8.1" }
 
 [package.metadata.cargo-machete]

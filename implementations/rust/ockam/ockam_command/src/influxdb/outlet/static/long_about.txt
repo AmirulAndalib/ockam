@@ -1,0 +1,5 @@
+Create an InfluxDB Outlet that runs adjacent to an InfluxDB server. The Outlet unwraps Ockam messages and delivers the http request to the server, after attaching authentication information to it.
+
+You must specify the TCP address of the server, that your Outlet should send raw TCP traffic to. You can also name your Outlet by giving it an alias.
+
+When you create an InfluxDB Outlet, on an Ockam node, running on your local machine, it makes the InfluxDB server available from a worker address, to the corresponding InfluxDB Inlet (see `ockam influxfb-inlet`).

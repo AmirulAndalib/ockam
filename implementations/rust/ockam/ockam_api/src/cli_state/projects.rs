@@ -7,10 +7,10 @@ use ockam_core::Error;
 use ockam_vault::SoftwareVaultForVerifyingSignatures;
 
 use crate::cli_state::{CliState, EnrollmentFilter, ProjectsRepository};
-use crate::cloud::email_address::EmailAddress;
-use crate::cloud::project::models::ProjectModel;
-use crate::cloud::project::Project;
-use crate::cloud::share::RoleInShare;
+use crate::orchestrator::email_address::EmailAddress;
+use crate::orchestrator::project::models::ProjectModel;
+use crate::orchestrator::project::Project;
+use crate::orchestrator::share::RoleInShare;
 
 use super::Result;
 
@@ -38,64 +38,31 @@ impl Projects {
 
     #[instrument(skip_all, fields(project_id = project.project_id()))]
     pub async fn store_project(&self, project: Project) -> Result<Project> {
-        if let Ok(project_identity) = project.project_identity() {
+        if let Some(project_identity) = project.project_identity() {
             self.identities_verification
                 .update_identity_ignore_older(project_identity)
                 .await?;
         }
 
-        if let Ok(authority_identity) = project.authority_identity() {
+        if let Some(authority_identity) = project.authority_identity() {
             self.identities_verification
                 .update_identity_ignore_older(authority_identity)
                 .await?;
         }
 
         self.store_project_model(project.model()).await?;
-
-        // If there is no previous default project set this project as the default
-        let default_project = self.projects_repository.get_default_project().await?;
-        if default_project.is_none() {
-            self.projects_repository
-                .set_default_project(project.project_id())
-                .await?
-        };
-
         Ok(project)
     }
 
     #[instrument(skip_all, fields(project_id = project.id))]
     pub async fn store_project_model(&self, project: &ProjectModel) -> Result<()> {
         self.projects_repository.store_project(project).await?;
-
-        // If there is no previous default project set this project as the default
-        let default_project = self.projects_repository.get_default_project().await?;
-        if default_project.is_none() {
-            self.projects_repository
-                .set_default_project(&project.id)
-                .await?
-        };
         Ok(())
     }
 
     #[instrument(skip_all, fields(project_id = project_id))]
     pub async fn delete_project(&self, project_id: &str) -> Result<()> {
-        // delete the project
-        let project_exists = self
-            .projects_repository
-            .get_project(project_id)
-            .await
-            .is_ok();
         self.projects_repository.delete_project(project_id).await?;
-
-        // set another project as the default project
-        if project_exists {
-            let other_projects = self.projects_repository.get_projects().await?;
-            if let Some(other_project) = other_projects.first() {
-                self.projects_repository
-                    .set_default_project(&other_project.id)
-                    .await?;
-            }
-        }
         Ok(())
     }
 

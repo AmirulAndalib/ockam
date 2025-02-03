@@ -1,13 +1,11 @@
-use example_test_helper::{CmdBuilder, Error};
-use ockam::compat::rand;
-use ockam::compat::rand::Rng;
+use example_test_helper::{find_available_port, CmdBuilder, Error};
 
 #[test]
 fn run_01_inlet_outlet_one_process() -> Result<(), Error> {
-    let port = rand::thread_rng().gen_range(10000..65535);
+    let port = find_available_port();
     // Spawn example, wait for it to start up
     let runner = CmdBuilder::new(&format!(
-        "cargo run --example 01-inlet-outlet 127.0.0.1:{port} ockam.io:80"
+        "cargo run --locked --example 01-inlet-outlet 127.0.0.1:{port} ockam.io:80"
     ))
     .spawn()?;
     runner.match_stdout(r"(?i)Starting new processor")?;
@@ -24,15 +22,18 @@ fn run_01_inlet_outlet_one_process() -> Result<(), Error> {
 
 #[test]
 fn run_02_inlet_outlet_separate_processes() -> Result<(), Error> {
-    let routing_port = rand::thread_rng().gen_range(10000..65535);
-    let inlet_port = rand::thread_rng().gen_range(10000..65535);
+    let routing_port = find_available_port();
+    let inlet_port = find_available_port();
     // Spawn outlet, wait for it to start up
-    let outlet = CmdBuilder::new(&format!("cargo run --example 02-outlet ockam.io:80 {routing_port}")).spawn()?;
+    let outlet = CmdBuilder::new(&format!(
+        "cargo run --locked --example 02-outlet ockam.io:80 {routing_port}"
+    ))
+    .spawn()?;
     outlet.match_stdout(r"(?i)Waiting for incoming TCP connection")?;
 
     // Spawn inlet, wait for it to start up
     let inlet = CmdBuilder::new(&format!(
-        "cargo run --example 02-inlet 127.0.0.1:{inlet_port} {routing_port}"
+        "cargo run --locked --example 02-inlet 127.0.0.1:{inlet_port} {routing_port}"
     ))
     .spawn()?;
     inlet.match_stdout(r"(?i)Binding \w+ to 127.0.0.1")?;
@@ -52,15 +53,18 @@ fn run_02_inlet_outlet_separate_processes() -> Result<(), Error> {
 #[test]
 #[ignore]
 fn run_03_inlet_outlet_separate_processes_secure_channel() -> Result<(), Error> {
-    let routing_port = rand::thread_rng().gen_range(10000..65535);
-    let inlet_port = rand::thread_rng().gen_range(10000..65535);
+    let routing_port = find_available_port();
+    let inlet_port = find_available_port();
     // Spawn outlet, wait for it to start up
-    let outlet = CmdBuilder::new(&format!("cargo run --example 03-outlet ockam.io:80 {routing_port}")).spawn()?;
+    let outlet = CmdBuilder::new(&format!(
+        "cargo run --locked --example 03-outlet ockam.io:80 {routing_port}"
+    ))
+    .spawn()?;
     outlet.match_stdout(r"(?i)Waiting for incoming TCP connection")?;
 
     // Spawn inlet, wait for it to start up
     let inlet = CmdBuilder::new(&format!(
-        "cargo run --example 03-inlet 127.0.0.1:{inlet_port} {routing_port}"
+        "cargo run --locked --example 03-inlet 127.0.0.1:{inlet_port} {routing_port}"
     ))
     .spawn()?;
     inlet.match_stdout(r"(?i)Binding \w+ to 127.0.0.1")?;
@@ -79,16 +83,19 @@ fn run_03_inlet_outlet_separate_processes_secure_channel() -> Result<(), Error> 
 
 #[test]
 #[ignore]
-fn run_04_inlet_outlet_seperate_processes_secure_channel_via_ockam_hub() -> Result<(), Error> {
-    let port = rand::thread_rng().gen_range(10000..65535);
+fn run_04_inlet_outlet_separate_processes_secure_channel_via_ockam_orchestrator() -> Result<(), Error> {
+    let port = find_available_port();
     // Spawn outlet, wait for it to start up, grab dynamic forwarding address
-    let outlet = CmdBuilder::new("cargo run --example 04-outlet ockam.io:80").spawn()?;
+    let outlet = CmdBuilder::new("cargo run --locked --example 04-outlet ockam.io:80").spawn()?;
     outlet.match_stdout(r"(?i)RemoteRelay was created on the node")?;
     let fwd_address = outlet.match_stdout(r"(?m)^FWD_(\w+)$")?.swap_remove(0).unwrap();
     println!("Forwarding address: {fwd_address}");
 
     // Spawn inlet, wait for it to start up
-    let inlet = CmdBuilder::new(&format!("cargo run --example 04-inlet 127.0.0.1:{port} {fwd_address}")).spawn()?;
+    let inlet = CmdBuilder::new(&format!(
+        "cargo run --locked --example 04-inlet 127.0.0.1:{port} {fwd_address}"
+    ))
+    .spawn()?;
     inlet.match_stdout(r"(?i)Binding \w+ to 127.0.0.1")?;
 
     // // Run curl and check for a successful run

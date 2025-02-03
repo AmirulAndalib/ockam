@@ -30,7 +30,7 @@ teardown() {
   run_success bash -c "$OCKAM secure-channel create --from /node/green --to /project/default/service/forward_to_$relay_name/service/api \
     | $OCKAM tcp-inlet create --at /node/green --from $port --to -/service/outlet"
 
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$port"
 }
 
 @test "relay - control who can create/claim a relay" {
@@ -52,7 +52,8 @@ teardown() {
   # Blue can take its relay
   run_success "$OCKAM" relay create $relay_name_blue --to /node/blue
   # Green can't take blue's relay
-  run_failure "$OCKAM" relay create $relay_name_blue --to /node/green
+  run_success "$OCKAM" relay create $relay_name_blue --to /node/green --jq ".connection_status"
+  assert_output "\"Down\""
   # But can take its the one it was assigned to in the ticket
   run_success "$OCKAM" relay create $relay_name_green --to /node/green
 
@@ -61,21 +62,4 @@ teardown() {
   # Admin can take any relay (has wildcard *)
   run_success "$OCKAM" relay create $relay_name_blue --to /node/admin_node
   run_success "$OCKAM" relay create $relay_name_green --to /node/admin_node
-}
-
-@test "relay - create relay between rust nodes requires credentials" {
-  relay_name=$(random_str)
-  relay_ticket_path="$OCKAM_HOME/relay.ticket"
-
-  run_success bash -c "$OCKAM project ticket --usage-count 1 --relay $relay_name > $relay_ticket_path"
-
-  setup_home_dir
-  $OCKAM project enroll $relay_ticket_path
-
-  run_success "$OCKAM" node create blue
-  run_success "$OCKAM" node create red
-
-  # fail with a different relay name
-  run_failure "$OCKAM" relay create --at /node/blue/secure/api --to red unauthorized_relay_name
-  run_success "$OCKAM" relay create --at /node/blue/secure/api --to red $relay_name
 }

@@ -32,7 +32,7 @@ async fn main(ctx: Context) -> Result<()> {
     let opt = Sender::parse();
 
     let node = node(ctx).await?;
-    let tcp = node.create_tcp_transport().await?;
+    let tcp = node.create_tcp_transport()?;
 
     // Create an Identity to represent Sender.
     let sender = node.create_identity().await?;
@@ -44,13 +44,13 @@ async fn main(ctx: Context) -> Result<()> {
     let forwarding_address = opt.address.trim();
 
     // Connect to the cloud node over TCP
-    let node_in_hub = tcp
+    let node_in_orchestrator = tcp
         .connect("1.node.ockam.network:4000", TcpConnectionOptions::new())
         .await?;
 
     // Combine the tcp address of the cloud node and the forwarding_address to get a route
     // to Receiver's secure channel listener.
-    let route_to_receiver_listener = route![node_in_hub, forwarding_address, "listener"];
+    let route_to_receiver_listener = route![node_in_orchestrator, forwarding_address, "listener"];
 
     // As Sender, connect to the Receiver's secure channel listener, and perform an
     // Authenticated Key Exchange to establish an encrypted secure channel with Receiver.
@@ -94,6 +94,6 @@ async fn main(ctx: Context) -> Result<()> {
         }
     }
 
-    // We won't call ctx.stop() here, this program will run until you stop it with Ctrl-C
+    // We won't call ctx.shutdown_node() here, this program will run until you stop it with Ctrl-C
     Ok(())
 }

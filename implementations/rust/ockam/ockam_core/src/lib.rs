@@ -57,7 +57,7 @@ pub use async_trait::async_trait as processor;
 
 extern crate ockam_macros;
 
-pub use ockam_macros::{AsyncTryClone, Message};
+pub use ockam_macros::{Message, TryClone};
 
 extern crate futures_util;
 
@@ -80,6 +80,7 @@ pub mod env;
 pub mod bare;
 mod cbor;
 mod error;
+mod identity;
 mod message;
 mod processor;
 mod routing;
@@ -89,6 +90,7 @@ mod worker;
 pub use access_control::*;
 pub use cbor::*;
 pub use error::*;
+pub use identity::*;
 pub use message::*;
 pub use processor::*;
 pub use routing::*;
@@ -103,33 +105,29 @@ pub use compat::println;
 #[doc(hidden)]
 pub use std::println;
 
-use crate::compat::boxed::Box;
-
-/// Clone trait for async structs.
-#[async_trait]
-pub trait AsyncTryClone: Sized {
-    /// Try cloning a object and return an `Err` in case of failure.
-    async fn async_try_clone(&self) -> Result<Self>;
+/// Clone trait when clone can fail.
+pub trait TryClone: Sized {
+    /// Try cloning an object and return an `Err` in case of failure.
+    fn try_clone(&self) -> Result<Self>;
 }
 
-#[async_trait]
-impl<D> AsyncTryClone for D
+impl<D> TryClone for D
 where
     D: Clone + Sync,
 {
-    async fn async_try_clone(&self) -> Result<Self> {
+    fn try_clone(&self) -> Result<Self> {
         Ok(self.clone())
     }
 }
 
 /// Produces Ok(false) to avoid an ambiguous reading from using the unadorned value in auth code.
-#[inline]
+#[inline(always)]
 pub fn deny() -> Result<bool> {
     Ok(false)
 }
 
 /// Produces Ok(true) to avoid an ambiguous reading from using the unadorned value in auth code.
-#[inline]
+#[inline(always)]
 pub fn allow() -> Result<bool> {
     Ok(true)
 }

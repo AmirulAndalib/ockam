@@ -11,7 +11,7 @@ use crate::run::parser::resource::utils::parse_cmd_from_args;
 use crate::run::parser::resource::Resource;
 use crate::{node, Command, OckamSubcommand};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Node {
     pub name: Option<ArgValue>,
     #[serde(alias = "skip-is-running-check")]
@@ -23,12 +23,23 @@ pub struct Node {
     pub exit_on_eof: Option<ArgValue>,
     #[serde(alias = "tcp-listener-address")]
     pub tcp_listener_address: Option<ArgValue>,
-    #[serde(alias = "enable-http-server")]
-    pub enable_http_server: Option<ArgValue>,
-    #[serde(alias = "http-server-port")]
-    pub http_server_port: Option<ArgValue>,
+    #[serde(alias = "http-server", alias = "enable-http-server")]
+    pub http_server: Option<ArgValue>,
+    #[serde(alias = "no-status-endpoint")]
+    pub no_status_endpoint: Option<ArgValue>,
+    #[serde(alias = "status-endpoint-port")]
+    pub status_endpoint_port: Option<ArgValue>,
     pub identity: Option<ArgValue>,
     pub project: Option<ArgValue>,
+    #[serde(alias = "launch-config")]
+    pub launch_config: Option<ArgValue>,
+    #[serde(alias = "opentelemetry-context")]
+    pub opentelemetry_context: Option<ArgValue>,
+    pub udp: Option<ArgValue>,
+    #[serde(alias = "udp-listener-address")]
+    pub udp_listener_address: Option<ArgValue>,
+    #[serde(alias = "in-memory")]
+    pub in_memory: Option<ArgValue>,
 }
 
 impl Resource<CreateCommand> for Node {
@@ -36,36 +47,53 @@ impl Resource<CreateCommand> for Node {
 
     fn args(self) -> Vec<String> {
         let mut args: BTreeMap<ArgKey, ArgValue> = BTreeMap::new();
+        args.insert("started-from-configuration".into(), true.into());
         if let Some(name) = self.name {
             args.insert("name".into(), name);
         }
         if let Some(skip_is_running_check) = self.skip_is_running_check {
-            args.insert("skip-is-running-check".to_string(), skip_is_running_check);
+            args.insert("skip-is-running-check".into(), skip_is_running_check);
         }
         if let Some(foreground) = self.foreground {
-            args.insert("foreground".to_string(), foreground);
+            args.insert("foreground".into(), foreground);
         }
         if let Some(child_process) = self.child_process {
-            args.insert("child-process".to_string(), child_process);
+            args.insert("child-process".into(), child_process);
         }
         if let Some(exit_on_eof) = self.exit_on_eof {
-            args.insert("exit-on-eof".to_string(), exit_on_eof);
+            args.insert("exit-on-eof".into(), exit_on_eof);
         }
         if let Some(tcp_listener_address) = self.tcp_listener_address {
-            args.insert("tcp-listener-address".to_string(), tcp_listener_address);
+            args.insert("tcp-listener-address".into(), tcp_listener_address);
         }
-        if let Some(enable_http_server) = self.enable_http_server {
-            args.insert("enable-http-server".to_string(), enable_http_server);
+        if let Some(udp_listener_address) = self.udp_listener_address {
+            args.insert("udp-listener-address".into(), udp_listener_address);
         }
-        if let Some(http_server_port) = self.http_server_port {
-            args.insert("http-server-port".to_string(), http_server_port);
+        if let Some(no_status_endpoint) = self.no_status_endpoint {
+            args.insert("no-status-endpoint".into(), no_status_endpoint);
+        }
+        if let Some(status_endpoint_port) = self.status_endpoint_port {
+            args.insert("status-endpoint-port".into(), status_endpoint_port);
         }
         if let Some(identity) = self.identity {
-            args.insert("identity".to_string(), identity);
+            args.insert("identity".into(), identity);
         }
         if let Some(project) = self.project {
-            args.insert("project".to_string(), project);
+            args.insert("project".into(), project);
         }
+        if let Some(launch_config) = self.launch_config {
+            args.insert("launch-config".into(), launch_config);
+        }
+        if let Some(opentelemetry_context) = self.opentelemetry_context {
+            args.insert("opentelemetry-context".into(), opentelemetry_context);
+        }
+        if let Some(udp) = self.udp {
+            args.insert("udp".into(), udp);
+        }
+        if let Some(in_memory) = self.in_memory {
+            args.insert("in-memory".into(), in_memory);
+        }
+
         if args.is_empty() {
             return vec![];
         }
@@ -73,7 +101,7 @@ impl Resource<CreateCommand> for Node {
         // Convert the map into a list of cli args
         let mut cmd_args = vec![];
         // Remove "name" from the arguments and use it as a positional argument
-        if let Some(name) = args.remove(Self::NAME_ARG) {
+        if let Some(ArgValue::String(name)) = args.remove(&Self::NAME_ARG.into()) {
             cmd_args.push(name.to_string());
         }
         cmd_args.extend(as_command_args(args));
@@ -95,13 +123,28 @@ impl Node {
             .unwrap_or(None)
     }
 
+    /// Return the identity name if defined
+    pub fn identity(&self) -> Option<String> {
+        self.identity
+            .clone()
+            .map(|v| match v {
+                ArgValue::String(s) => Some(s),
+                _ => None,
+            })
+            .unwrap_or(None)
+    }
+
     pub fn into_parsed_commands(self) -> Result<Vec<CreateCommand>> {
         Ok(vec![Self::get_subcommand(&self.args())?])
     }
 
     fn get_subcommand(args: &[String]) -> Result<CreateCommand> {
         if let OckamSubcommand::Node(cmd) = parse_cmd_from_args(CreateCommand::NAME, args)? {
-            if let node::NodeSubcommand::Create(c) = cmd.subcommand {
+            if let node::NodeSubcommand::Create(mut c) = cmd.subcommand {
+                c.config_args.configuration = None;
+                c.config_args.variables = vec![];
+                c.config_args.enrollment_ticket = None;
+                c.config_args.started_from_configuration = true;
                 return Ok(c);
             }
         }

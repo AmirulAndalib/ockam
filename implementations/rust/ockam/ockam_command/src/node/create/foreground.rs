@@ -1,47 +1,26 @@
-use clap::Args;
-use std::io;
-use std::io::Read;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-
-use colorful::Colorful;
-use miette::{miette, IntoDiagnostic};
-use tokio::time::{sleep, Duration};
-use tracing::{debug, info, instrument};
-
+use crate::node::node_callback::NodeCallback;
+use crate::node::CreateCommand;
+use crate::util::foreground_args::wait_for_exit_signal;
+use crate::CommandGlobalOpts;
+use miette::miette;
+use miette::IntoDiagnostic;
 use ockam::tcp::{TcpListenerOptions, TcpTransport};
-use ockam::udp::UdpTransport;
-use ockam::{Address, Context};
-use ockam_api::colors::color_primary;
+use ockam::udp::{UdpBindArguments, UdpBindOptions, UdpTransport};
+use ockam::Address;
+use ockam::Context;
+use ockam_api::fmt_log;
+use ockam_api::nodes::service::{NodeManagerTransport, SecureChannelType};
 use ockam_api::nodes::InMemoryNode;
 use ockam_api::nodes::{
     service::{NodeManagerGeneralOptions, NodeManagerTransportOptions},
     NodeManagerWorker, NODEMANAGER_ADDR,
 };
 use ockam_api::terminal::notification::NotificationHandler;
-use ockam_api::{fmt_log, fmt_ok, fmt_warn};
-use ockam_core::{route, LOCAL};
 
-use crate::node::CreateCommand;
-use crate::secure_channel::listener::create as secure_channel_listener;
-use crate::CommandGlobalOpts;
-
-#[derive(Clone, Debug, Args, Default)]
-pub struct ForegroundArgs {
-    /// Run the node in foreground mode. This will block the current process until the node receives
-    /// an exit signal (e.g., SIGINT, SIGTERM, CTRL+C, EOF).
-    #[arg(long, short)]
-    pub foreground: bool,
-
-    /// When running a node in foreground mode, exit the process when receiving EOF on stdin.
-    #[arg(long, short, requires = "foreground")]
-    pub exit_on_eof: bool,
-
-    /// A flag to determine whether the current foreground node was started as a child process.
-    /// This flag is only used internally and should not be set by the user.
-    #[arg(hide = true, long, requires = "foreground")]
-    pub child_process: bool,
-}
+use ockam_core::LOCAL;
+use std::sync::Arc;
+use tokio::time::{sleep, Duration};
+use tracing::{debug, info, instrument};
 
 impl CreateCommand {
     #[instrument(skip_all, fields(node_name = self.name))]
@@ -52,21 +31,6 @@ impl CreateCommand {
     ) -> miette::Result<()> {
         let node_name = self.name.clone();
         debug!("creating node in foreground mode");
-
-        if !self.skip_is_running_check
-            && opts
-                .state
-                .get_node(&node_name)
-                .await
-                .ok()
-                .map(|n| n.is_running())
-                .unwrap_or(false)
-        {
-            return Err(miette!(
-                "Node {} is already running",
-                color_primary(&node_name)
-            ));
-        }
 
         let trust_options = opts
             .state
@@ -80,59 +44,59 @@ impl CreateCommand {
             .into_diagnostic()?;
 
         // Create TCP transport
-        let tcp = TcpTransport::create(ctx).await.into_diagnostic()?;
+        let tcp = TcpTransport::create(ctx).into_diagnostic()?;
         let tcp_listener = tcp
             .listen(&self.tcp_listener_address, TcpListenerOptions::new())
             .await
             .into_diagnostic()?;
         info!("TCP listener at {}", tcp_listener.socket_address());
 
-        let _notification_handler = NotificationHandler::start(&opts.state, opts.terminal.clone());
-
         // Set node_name so that node can isolate its data in the storage from other nodes
-        let state = opts.state.clone();
-
-        let node_info = state
-            .start_node_with_optional_values(
-                &node_name,
-                &self.identity,
-                &self.trust_opts.project_name,
-                Some(&tcp_listener),
-            )
+        self.get_or_create_identity(&opts, &self.identity).await?;
+        let _notification_handler = if self.foreground_args.child_process {
+            // If enabled, the user's terminal would receive notifications
+            // from the node after the command exited.
+            None
+        } else {
+            // Enable the notifications only on explicit foreground nodes.
+            Some(NotificationHandler::start(
+                &opts.state,
+                opts.terminal.clone(),
+            ))
+        };
+        let node_info = opts
+            .state
+            .start_node_with_optional_values(&node_name, &self.identity, Some(&tcp_listener))
             .await?;
         debug!("node info persisted {node_info:?}");
 
-        let http_server_port = if let Some(port) = self.http_server_port {
-            Some(port)
-        } else if self.enable_http_server {
-            if let Some(addr) = node_info.http_server_address() {
-                Some(addr.port())
-            } else {
-                Some(0)
-            }
+        let udp_options = if self.udp {
+            let udp = UdpTransport::create(ctx).into_diagnostic()?;
+            let options = UdpBindOptions::new();
+            let flow_control_id = options.flow_control_id();
+            udp.bind(
+                UdpBindArguments::new().with_bind_address(&self.udp_listener_address)?,
+                options,
+            )
+            .await?;
+
+            Some(NodeManagerTransport::new(flow_control_id, udp))
         } else {
             None
         };
 
-        let udp_transport = if self.enable_udp {
-            Some(UdpTransport::create(ctx).await.into_diagnostic()?)
-        } else {
-            None
-        };
-
-        let node_man = InMemoryNode::new(
+        let in_memory_node = InMemoryNode::new(
             ctx,
             NodeManagerGeneralOptions::new(
-                state,
+                opts.state.clone(),
                 node_name.clone(),
-                self.launch_config.is_none(),
-                http_server_port,
+                self.launch_configuration.is_none(),
+                self.status_endpoint_port(),
                 true,
             ),
             NodeManagerTransportOptions::new(
-                tcp_listener.flow_control_id().clone(),
-                tcp,
-                udp_transport,
+                NodeManagerTransport::new(tcp_listener.flow_control_id().clone(), tcp),
+                udp_options,
             ),
             trust_options,
         )
@@ -140,15 +104,19 @@ impl CreateCommand {
         .into_diagnostic()?;
         debug!("in-memory node created");
 
-        let node_manager_worker = NodeManagerWorker::new(Arc::new(node_man));
+        let in_memory_node = Arc::new(in_memory_node);
+        let node_manager_worker = NodeManagerWorker::new(in_memory_node.clone());
         ctx.flow_controls()
-            .add_consumer(NODEMANAGER_ADDR, tcp_listener.flow_control_id());
+            .add_consumer(&NODEMANAGER_ADDR.into(), tcp_listener.flow_control_id());
         ctx.start_worker(NODEMANAGER_ADDR, node_manager_worker)
-            .await
             .into_diagnostic()?;
         debug!("node manager worker started");
 
-        if self.start_services(ctx, &opts).await.is_err() {
+        if self
+            .start_secure_channel_listener(ctx, &in_memory_node, &opts)
+            .await
+            .is_err()
+        {
             //TODO: Process should terminate on any error during its setup phase,
             //      not just during the start_services.
             //TODO: This sleep here is a workaround on some orchestrated environment,
@@ -158,109 +126,73 @@ impl CreateCommand {
             //      and the other being terminated, so when restarted it works.  This is
             //      FAR from ideal.
             sleep(Duration::from_secs(10)).await;
-            ctx.stop().await.into_diagnostic()?;
+            ctx.shutdown_node().await.into_diagnostic()?;
             return Err(miette!("Failed to start services"));
         }
 
-        if !self.foreground_args.child_process {
-            opts.terminal
-                .clone()
-                .stdout()
-                .plain(self.plain_output(&opts, &node_name).await?)
-                .write_line()?;
+        let node_resources = in_memory_node.get_node_resources().await?;
+        opts.terminal
+            .clone()
+            .stdout()
+            .plain(self.plain_output(&opts, &node_name).await?)
+            .machine(&node_name)
+            .json_obj(&node_resources)?
+            .write_line()?;
+
+        if let Some(tcp_callback_port) = self.tcp_callback_port {
+            NodeCallback::signal(tcp_callback_port);
         }
 
-        drop(_notification_handler);
-        self.wait_for_exit_signal(ctx, opts).await
-    }
-
-    /// Wait until it receives a CTRL+C, EOF or a signal to exit
-    pub async fn wait_for_exit_signal(
-        &self,
-        ctx: &Context,
-        opts: CommandGlobalOpts,
-    ) -> miette::Result<()> {
-        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
-
-        // Register a handler for SIGINT, SIGTERM, SIGHUP
-        {
-            let tx = tx.clone();
-            let terminal = opts.terminal.clone();
-            // To avoid handling multiple CTRL+C signals at the same time
-            let flag = Arc::new(AtomicBool::new(true));
-            let is_child_process = self.foreground_args.child_process;
-            ctrlc::set_handler(move || {
-                if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                    let _ = tx.blocking_send(());
-                    info!("Ctrl+C signal received");
-                    if !is_child_process {
-                        let _ = terminal.write_line(fmt_warn!("Ctrl+C signal received"));
-                    }
-                    flag.store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-            })
-            .expect("Error setting Ctrl+C handler");
-        }
-
-        if self.foreground_args.exit_on_eof {
-            // Spawn a thread to monitor STDIN for EOF
-            {
-                let tx = tx.clone();
-                let terminal = opts.terminal.clone();
-                std::thread::spawn(move || {
-                    let mut buffer = Vec::new();
-                    let mut handle = io::stdin().lock();
-                    if handle.read_to_end(&mut buffer).is_ok() {
-                        let _ = tx.blocking_send(());
-                        info!("EOF received");
-                        let _ = terminal.write_line(fmt_warn!("EOF received"));
-                    }
-                });
-            }
-        }
-
-        debug!("waiting for exit signal");
-
-        if !self.foreground_args.child_process {
-            opts.terminal.write_line(&fmt_log!(
-                "To exit and stop the Node, please press Ctrl+C\n"
-            ))?;
-        }
-
-        // Wait for signal SIGINT, SIGTERM, SIGHUP or EOF; or for the tx to be closed.
-        rx.recv().await;
+        wait_for_exit_signal(
+            &self.foreground_args,
+            &opts,
+            "To exit and stop the Node, please press Ctrl+C\n",
+        )
+        .await?;
 
         // Clean up and exit
-        opts.shutdown();
-        let _ = opts.state.stop_node(&self.name, true).await;
-        let _ = ctx.stop().await;
-        if !self.foreground_args.child_process {
-            opts.terminal
-                .write_line(fmt_ok!("Node stopped successfully"))?;
-        }
+        let _ = opts.state.stop_node(&node_name).await;
 
         Ok(())
     }
 
-    async fn start_services(&self, ctx: &Context, opts: &CommandGlobalOpts) -> miette::Result<()> {
-        if let Some(config) = &self.launch_config {
-            if let Some(startup_services) = &config.startup_services {
-                if let Some(cfg) = startup_services.secure_channel_listener.clone() {
-                    if !cfg.disabled {
-                        opts.terminal
-                            .write_line(fmt_log!("Starting secure-channel listener ..."))?;
-                        secure_channel_listener::create_listener(
-                            ctx,
-                            Address::from((LOCAL, cfg.address)),
-                            cfg.authorized_identifiers,
-                            cfg.identity,
-                            route![],
-                        )
-                        .await?;
-                    }
-                }
+    async fn start_secure_channel_listener(
+        &self,
+        ctx: &Context,
+        in_memory_node: &InMemoryNode,
+        opts: &CommandGlobalOpts,
+    ) -> miette::Result<()> {
+        let launch_configuration = if let Some(launch_configuration) = &self.launch_configuration {
+            launch_configuration
+        } else {
+            return Ok(());
+        };
+
+        let startup_services =
+            if let Some(startup_services) = &launch_configuration.startup_services {
+                startup_services
+            } else {
+                return Ok(());
+            };
+
+        if let Some(cfg) = startup_services.secure_channel_listener.as_ref() {
+            if cfg.disabled {
+                return Ok(());
             }
+
+            opts.terminal
+                .write_line(fmt_log!("Starting secure-channel listener ..."))?;
+            in_memory_node
+                .create_secure_channel_listener(
+                    Address::from((LOCAL, cfg.address.clone())),
+                    cfg.authorized_identifiers.clone(),
+                    cfg.identity.clone(),
+                    ctx,
+                    SecureChannelType::KeyExchangeAndMessages,
+                )
+                .await?;
         }
+
         Ok(())
     }
 }

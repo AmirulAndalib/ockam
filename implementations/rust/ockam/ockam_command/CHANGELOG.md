@@ -4,6 +4,306 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.147.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Don't create a member for an opentelemetry node
+- Update the postgres schema
+- Isolate member data by authority
+- Add binary to compile branded command binaries
+- Update the legacy authority identity name
+- Updated dependencies
+
+### Changed
+
+- Rename cloud module to orchestrator
+- Revert command features
+
+### Fixed
+
+- Fix the migration of in-memory sqlite dbs
+
+## 0.146.0 - 2025-01-09
+
+### Added
+
+- Simplify `node create` execution
+- To reduce memory fragmentation use mimalloc in command and stress-test
+- Sort credentials output alphabetically
+- Improve logs for relay creation
+- Improve stdout output for `node create`
+- Improve logs for tcp portals creation
+- Add a custom log format to change the fields order
+- Session replacer sends notifications on session lost/replaced
+- Add "unsafe" tag to commands that are considered unsafe
+- Improvements to portals commands arguments
+- Updated dependencies
+
+### Changed
+
+- Extract `OCKAM_SQLITE_IN_MEMORY` env var usage up to the cli state initialization
+- Update cli documentation for the `status` and `reset` commands
+
+### Fixed
+
+- `project enroll` command won't issue a credential if run in-memory
+- Newlines between commands run in a configuration
+- Fix bats test on kafka-inlet args parsing
+
+## 0.145.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Updated dependencies
+
+## 0.144.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.143.0 - 2024-11-30
+
+### Added
+
+- Updated dependencies
+
+## 0.142.0 - 2024-11-27
+
+### Added
+
+- Return new ticket format in `project ticket`
+- Node's http server is enabled by default
+- Rename `--hex-encoded` arg to `--hex` in `project ticket`
+- Simplify command node shutdown
+- Add env. variables for auth0
+- Adjust `enroll` logic and output for the new subscription plans
+- Updated dependencies
+
+### Fixed
+
+- Adjust timeout used when waiting for a node to be ready
+
+## 0.141.0 - 2024-11-12
+
+### Added
+
+- Support json output in `project ticket`
+- `project ticket` show warning when using high values for ticket duration/usage
+- Add plain output to `project ticket`
+- First argument of `node create` can contain an inline configuration
+- Cleanup plain output of `project ticket` command
+- Improve delete behavior on different commands
+- Rename ebpf portals -> privileged portals
+- Improve output for privileged portals creation
+- Updated dependencies
+
+### Fixed
+
+- `relay create` deprecated warning message
+- Influxdb and tcp inlets delay the alias random value initialization to prevent collisions
+- Make sure that traces are exported when a command is executed
+- Force flush the traces later
+- Error chain is kept in ockam_command crate
+- Fix udp flag for ockam node create with config argument
+
+## 0.140.0 - 2024-10-25
+
+### Added
+
+- Support json comments in node config
+- Improve parsing of node config files
+- Updated dependencies
+
+### Fixed
+
+- In test use a dedicated temporary directory
+- Use the proper tls configuration to export logs and traces
+
+## 0.139.0 - 2024-10-24
+
+### Added
+
+- Pretty json output by default, and colored if possible
+- Add more granular scopes for command logs
+- Allow relay connection failure without failing relay creation
+- Updated dependencies
+
+## 0.138.0 - 2024-10-23
+
+### Added
+
+- Switching to sqlite wal mode for better concurrency
+- Updated dependencies
+
+### Fixed
+
+- Usage of `ENROLLMENT_TICKET` in `node create` and `project enroll` used in a node config
+
+## 0.137.0 - 2024-10-21
+
+### Added
+
+- Change behavior of how nodes' processes are stopped
+- Improvements to commands outputs
+- Add retry to the command's upgrade github request
+- Return enrollment ticket hex-encoded
+- Updated dependencies
+
+## 0.136.0 - 2024-10-16
+
+### Added
+
+- Introduce `OCKAM_EBPF` environment variable
+- Updated dependencies
+
+### Fixed
+
+- `node create` name arg is handled correctly when used with configurations args
+- `project enroll` should not try to fetch project data from orchestrator
+
+## 0.135.0 - 2024-10-15
+
+### Added
+
+- Allow multiple values in node configuration entries
+- More options on token management for influxdb_outlet
+- Simplify influxdb outlet deployment options
+- Compact enrollment ticket encoded format
+- Use the project name directly for member commands
+- Number messages when trying to delete project members
+- Remove the part where we delete members before deleting the project
+- Updated dependencies
+
+### Changed
+
+- Bump rustls-native-certs from 0.7.3 to 0.8.0
+
+### Fixed
+
+- Generate the enrollment ticket using the project route, and not its id
+
+## 0.134.0 - 2024-09-23
+
+### Added
+
+- Add a value parser for change histories
+- Added `TLS` inlet support
+- Implement influxdb token lessor service
+- Influxdb inlet/outlet that attach authorization token
+- Improve output for lease commands
+- Refactor influxdb api client to better handle error responses
+- Add reliable `TCP` portals to `ockam_api`&`ockam_command`
+- Hide udp and ebpf options from command help
+- Improve ux of influxdb portal commands
+- Set url dep as optional on ockam_transport_core
+- Improve influxdb inlet|outlet command arguments
+- Add `ockam rendezvous get-my-address` command
+- Unload ebpfs on `ockam reset`
+- Updated dependencies
+
+### Fixed
+
+- Graceful stop of a node in the command
+- `node create` name arg can't be a directory
+
+## 0.133.0 - 2024-08-14
+
+### Added
+
+- Added the possibility to encrypt specific fields in a kafka `JSON` record
+- Updated dependencies
+
+## 0.132.0 - 2024-08-12
+
+### Added
+
+- Add validation for `node create` positional argument (name or conf)
+- In `node create`, the command args have precedence over config values
+- Updated dependencies
+
+### Changed
+
+- Rewrite `ArgKey` as a struct instead of a type
+- Do not enforce the existence of project and authority identities
+
+## 0.131.0 - 2024-08-06
+
+### Added
+
+- Rework `Session`s
+- Crud for space and project admins
+- The config of `node create` accepts an `identity`
+- Updated dependencies
+
+### Changed
+
+- Use terminal struct in-place of println! in `tcp-connection show`
+
+### Fixed
+
+- Propagate global options to commands run in the node configuration
+- Use node identity in project enroll
+
+## 0.130.0 - 2024-07-29
+
+### Added
+
+- Add the possibility to configure the default client timeout
+- Wait for the project to be ready before creating an authority client
+- Move rendezvous_server to `ockam rendezvous-server start`
+- Rename `rendezvous-server start` -> `rendezvous create`
+- Implicitly resolve outlet addresses during connection
+- Converted socket addresses to hostnames in command
+- Remove sync operations
+- Avoid ignoring error for `ockam project import`
+- Log commands by default to a file
+- Don't log to a file for a foreground node command
+- Adjust timeouts
+- Report more detailed errors
+- Integrate space's subscription data in command
+- Updated dependencies
+
+### Changed
+
+- Rename `enable/disable-` args to follow the convention of `color/no-color`
+- Always log messages from the terminal if logging is true
+
+### Fixed
+
+- Return the last error for a retried command
+- `disable-content-encryption` false by default
+
+## 0.129.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Improve output of `project enroll` and `credential` commands
+
+## 0.128.0 - 2024-07-01
+
+### Added
+
+- Improve transport imports
+- Integrate `UDP` puncture into `ockam_api`
+- Add delete and list commands for kafka-outlet
+- Use the any driver for sqlx to add support for postgres
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
+### Changed
+
+- `project-member` commands, and adds the `show` command
+- `kafka-*` commands
+
 ## 0.127.0 - 2024-06-25
 
 ### Added

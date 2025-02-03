@@ -4,7 +4,7 @@ use miette::miette;
 use ockam_api::colors::OckamColor;
 use ockam_api::{color, fmt_info, fmt_ok, fmt_warn};
 
-use crate::util::async_cmd;
+use crate::util::print_warning_for_deprecated_flag_no_effect;
 use crate::{docs, CommandGlobalOpts};
 
 const LONG_ABOUT: &str = include_str!("./static/stop/long_about.txt");
@@ -22,23 +22,21 @@ pub struct StopCommand {
     /// Name of the node.
     node_name: Option<String>,
 
-    /// Whether to use the SIGTERM or SIGKILL signal to stop the node
+    /// [DEPRECATED] Whether to use the SIGTERM or SIGKILL signal to stop the node
     #[arg(short, long)]
     force: bool,
 }
 
 impl StopCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |_ctx| async move {
-            self.async_run(opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "node stop".into()
     }
 
-    async fn async_run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
+        if self.force {
+            print_warning_for_deprecated_flag_no_effect(&opts, "--force")?;
+        }
+
         let running_nodes = opts
             .state
             .get_nodes()
@@ -67,7 +65,7 @@ impl StopCommand {
                     node_name.light_magenta()
                 ));
             }
-            stop_node(opts, &node_name, self.force).await?;
+            stop_node(opts, &node_name).await?;
             return Ok(());
         }
 
@@ -77,7 +75,7 @@ impl StopCommand {
             }
             1 => {
                 let node_name = running_nodes[0].as_str();
-                stop_node(opts, node_name, self.force).await?;
+                stop_node(opts, node_name).await?;
             }
             _ => {
                 let selected_item_names = opts.terminal.select_multiple(
@@ -93,11 +91,11 @@ impl StopCommand {
                     }
                     1 => {
                         let node_name = selected_item_names[0].as_str();
-                        stop_node(opts, node_name, self.force).await?;
+                        stop_node(opts, node_name).await?;
                     }
                     _ => {
                         for item_name in selected_item_names {
-                            stop_node(opts.clone(), &item_name, self.force).await?;
+                            stop_node(opts.clone(), &item_name).await?;
                         }
                     }
                 }
@@ -107,11 +105,11 @@ impl StopCommand {
     }
 }
 
-async fn stop_node(opts: CommandGlobalOpts, node_name: &str, force: bool) -> miette::Result<()> {
-    let res = opts.state.stop_node(node_name, force).await;
+async fn stop_node(opts: CommandGlobalOpts, node_name: &str) -> miette::Result<()> {
+    let res = opts.state.stop_node(node_name).await;
     let output = if res.is_ok() {
         fmt_ok!(
-            "Node with name {} was stopped",
+            "The node with name {} was stopped",
             color!(node_name, OckamColor::PrimaryResource)
         )
     } else {

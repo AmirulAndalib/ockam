@@ -1,7 +1,7 @@
 // This node routes a message, to a worker on a different node, over the udp transport.
 
+use ockam::udp::{UdpBindArguments, UdpBindOptions, UdpTransportExtension, UDP};
 use ockam::{node, route, Context, Result};
-use ockam_transport_udp::{UdpBindArguments, UdpBindOptions, UdpTransportExtension, UDP};
 
 #[ockam::node]
 async fn main(ctx: Context) -> Result<()> {
@@ -21,5 +21,5 @@ async fn main(ctx: Context) -> Result<()> {
     println!("App Received: {}", reply); // should print "Hello Ockam!"
 
     // Stop all workers, stop the node, cleanup and return.
-    node.stop().await
+    node.shutdown().await
 }

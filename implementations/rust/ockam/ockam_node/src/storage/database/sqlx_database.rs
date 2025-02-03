@@ -9,6 +9,9 @@ use ockam_core::errcode::{Kind, Origin};
 use sqlx::any::{install_default_drivers, AnyConnectOptions};
 use sqlx::pool::PoolOptions;
 use sqlx::{Any, ConnectOptions, Pool};
+use sqlx_core::any::AnyConnection;
+use sqlx_core::executor::Executor;
+use sqlx_core::row::Row;
 use tempfile::NamedTempFile;
 use tokio_retry::strategy::{jitter, FixedInterval};
 use tokio_retry::Retry;
@@ -19,7 +22,7 @@ use crate::database::database_configuration::DatabaseConfiguration;
 use crate::database::migrations::application_migration_set::ApplicationMigrationSet;
 use crate::database::migrations::node_migration_set::NodeMigrationSet;
 use crate::database::migrations::MigrationSet;
-use crate::database::DatabaseType;
+use crate::database::{DatabaseType, MigrationStatus};
 use ockam_core::compat::rand::random_string;
 use ockam_core::compat::sync::Arc;
 use ockam_core::{Error, Result};
@@ -34,7 +37,8 @@ use ockam_core::{Error, Result};
 pub struct SqlxDatabase {
     /// Pool of connections to the database
     pub pool: Arc<Pool<Any>>,
-    configuration: DatabaseConfiguration,
+    /// Configuration of the database
+    pub configuration: DatabaseConfiguration,
 }
 
 impl Debug for SqlxDatabase {
@@ -73,13 +77,26 @@ impl SqlxDatabase {
     }
 
     /// Constructor for a sqlite database
-    pub async fn create_sqlite(path: &Path) -> Result<Self> {
+    pub async fn create_sqlite(path: impl AsRef<Path>) -> Result<Self> {
         Self::create(&DatabaseConfiguration::sqlite(path)).await
     }
 
+    /// Constructor for a sqlite database with no migrations
+    pub async fn create_sqlite_no_migration(path: impl AsRef<Path>) -> Result<Self> {
+        Self::create_no_migration(&DatabaseConfiguration::sqlite(path)).await
+    }
+
     /// Constructor for a sqlite application database
-    pub async fn create_application_sqlite(path: &Path) -> Result<Self> {
+    pub async fn create_application_sqlite(path: impl AsRef<Path>) -> Result<Self> {
         Self::create_application_database(&DatabaseConfiguration::sqlite(path)).await
+    }
+
+    /// Constructor for a postgres database that doesn't apply migrations
+    pub async fn create_postgres_no_migration(legacy_sqlite_path: Option<PathBuf>) -> Result<Self> {
+        match DatabaseConfiguration::postgres_with_legacy_sqlite_path(legacy_sqlite_path)? {
+            Some(configuration) => Self::create_no_migration(&configuration).await,
+            None => Err(Error::new(Origin::Core, Kind::NotFound, "There is no postgres database configuration, or it is incomplete. Please run ockam environment to check the database environment variables".to_string())),
+        }
     }
 
     /// Constructor for a local postgres database with no data
@@ -130,32 +147,104 @@ impl SqlxDatabase {
         configuration: &DatabaseConfiguration,
         migration_set: Option<impl MigrationSet>,
     ) -> Result<Self> {
+        debug!("Creating SQLx database using configuration");
+
         configuration.create_directory_if_necessary()?;
 
         // creating a new database might be failing a few times
         // if the files are currently being held by another pod which is shutting down.
-        // In that case we retry a few times, between 1 and 10 seconds.
+        // In that case, we retry a few times, between 1 and 10 seconds.
         let retry_strategy = FixedInterval::from_millis(1000)
             .map(jitter) // add jitter to delays
             .take(10); // limit to 10 retries
 
-        let db = Retry::spawn(retry_strategy, || async {
-            match Self::create_at(configuration).await {
-                Ok(db) => Ok(db),
-                Err(e) => {
-                    println!("{e:?}");
-                    Err(e)
+        // migrate the database using exclusive locking only when operating with files
+        let database = if configuration.database_type() == DatabaseType::Sqlite
+            && configuration.path().is_some()
+        {
+            if let Some(migration_set) = migration_set {
+                // To avoid any issues with the database being locked for more than necessary,
+                // we open the database, run the migrations and close it.
+                // (Changing the locking_mode back to NORMAL is not enough to release the lock)
+
+                // We also request a single connection pool to avoid any issues with multiple
+                // connections to a locked database.
+                let migration_config = configuration.single_connection();
+
+                let database = Retry::spawn(retry_strategy.clone(), || async {
+                    match Self::create_at(&migration_config).await {
+                        Ok(db) => Ok(db),
+                        Err(e) => {
+                            println!("{e:?}");
+                            Err(e)
+                        }
+                    }
+                })
+                .await?;
+
+                let migrator = migration_set.create_migrator()?;
+                let status = migrator.migrate(&database.pool).await?;
+                database.close().await;
+                match status {
+                    MigrationStatus::UpToDate(_) => (),
+                    MigrationStatus::Todo(_, _) => (),
+                    MigrationStatus::Failed(version, reason) => Err(Error::new(
+                        Origin::Node,
+                        Kind::Conflict,
+                        format!(
+                            "Sql migration previously failed for version {}. Reason: {}",
+                            version, reason
+                        ),
+                    ))?,
+                }
+            };
+
+            // re-create the connection pool with the correct configuration
+            Retry::spawn(retry_strategy, || async {
+                match Self::create_at(configuration).await {
+                    Ok(db) => Ok(db),
+                    Err(e) => {
+                        println!("{e:?}");
+                        Err(e)
+                    }
+                }
+            })
+            .await?
+        } else {
+            let database = Retry::spawn(retry_strategy, || async {
+                match Self::create_at(configuration).await {
+                    Ok(db) => Ok(db),
+                    Err(e) => {
+                        println!("{e:?}");
+                        Err(e)
+                    }
+                }
+            })
+            .await?;
+
+            // Only run the postgres migrations if the database has never been created.
+            // This is mostly for tests. In production the database schema must be created separately
+            // during the first deployment.
+            let migrate_database = if configuration.database_type() == DatabaseType::Postgres {
+                let database_schema_already_created: bool = sqlx::query("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'identity')")
+                    .fetch_one(&*database.pool)
+                    .await.into_core()?.get(0);
+                !database_schema_already_created
+            } else {
+                true
+            };
+
+            if migrate_database {
+                if let Some(migration_set) = migration_set {
+                    let migrator = migration_set.create_migrator()?;
+                    migrator.migrate(&database.pool).await?;
                 }
             }
-        })
-        .await?;
 
-        if let Some(migration_set) = migration_set {
-            let migrator = migration_set.create_migrator()?;
-            migrator.migrate(&db.pool).await?;
-        }
+            database
+        };
 
-        Ok(db)
+        Ok(database)
     }
 
     /// Create a nodes database in memory
@@ -190,6 +279,15 @@ impl SqlxDatabase {
         Ok(db)
     }
 
+    /// Return true if the database implementation might lock (which is the case for Sqlite on disk)
+    /// and the database user needs to retry several times.
+    pub fn needs_retry(&self) -> bool {
+        matches!(
+            self.configuration,
+            DatabaseConfiguration::SqlitePersistent { .. }
+        )
+    }
+
     async fn create_at(configuration: &DatabaseConfiguration) -> Result<Self> {
         // Creates database file if it doesn't exist
         let pool = Self::create_connection_pool(configuration).await?;
@@ -209,26 +307,84 @@ impl SqlxDatabase {
             .map_err(Self::map_sql_err)?
             .log_statements(LevelFilter::Trace)
             .log_slow_statements(LevelFilter::Trace, Duration::from_secs(1));
-        let pool = Pool::connect_with(options)
+
+        // sqlx default is 10, 16 is closer to the typical number of threads spawn
+        // by tokio within a node, but has no particular reason
+        const MAX_POOL_SIZE: u32 = 16;
+
+        let max_pool_size = match configuration {
+            DatabaseConfiguration::SqlitePersistent {
+                single_connection, ..
+            }
+            | DatabaseConfiguration::SqliteInMemory { single_connection } => {
+                if *single_connection {
+                    1
+                } else {
+                    MAX_POOL_SIZE
+                }
+            }
+            _ => MAX_POOL_SIZE,
+        };
+
+        let pool_options = PoolOptions::new()
+            .max_connections(max_pool_size)
+            .min_connections(1);
+
+        let pool_options = if configuration.database_type() == DatabaseType::Sqlite {
+            // SQLite's configuration is specific for each connection, and needs to be set every time
+            pool_options.after_connect(|connection: &mut AnyConnection, _metadata| {
+                Box::pin(async move {
+                    // Set configuration for SQLite, see https://www.sqlite.org/pragma.html
+                    // synchronous = EXTRA - trade performance for durability and reliability
+                    // locking_mode = NORMAL - it's important because WAL mode changes behavior
+                    //                         if locking_mode is set to EXCLUSIVE *before* WAL is set
+                    // busy_timeout = 10000 - wait for 10 seconds before failing a query due to exclusive lock
+                    let _ = connection
+                        .execute(
+                            r#"
+PRAGMA synchronous = EXTRA;
+PRAGMA locking_mode = NORMAL;
+PRAGMA busy_timeout = 10000;
+                "#,
+                        )
+                        .await
+                        .expect("Failed to set SQLite configuration");
+
+                    Ok(())
+                })
+            })
+        } else {
+            pool_options
+        };
+
+        let pool = pool_options
+            .connect_with(options)
             .await
             .map_err(Self::map_sql_err)?;
+
         Ok(pool)
     }
 
     /// Create a connection for a SQLite database
-    pub async fn create_sqlite_connection_pool(path: &Path) -> Result<Pool<Any>> {
-        Self::create_connection_pool(&DatabaseConfiguration::sqlite(path)).await
+    pub async fn create_sqlite_single_connection_pool(path: impl AsRef<Path>) -> Result<Pool<Any>> {
+        Self::create_connection_pool(&DatabaseConfiguration::sqlite(path).single_connection()).await
     }
 
     pub(crate) async fn create_in_memory_connection_pool() -> Result<Pool<Any>> {
         install_default_drivers();
         // SQLite in-memory DB get wiped if there is no connection to it.
         // The below setting tries to ensure there is always an open connection
+        let file_name = random_string();
+        let options = AnyConnectOptions::from_str(
+            format!("sqlite:file:{file_name}?mode=memory&cache=shared").as_str(),
+        )
+        .map_err(Self::map_sql_err)?
+        .log_statements(LevelFilter::Trace)
+        .log_slow_statements(LevelFilter::Trace, Duration::from_secs(1));
         let pool_options = PoolOptions::new().idle_timeout(None).max_lifetime(None);
 
-        let file_name = random_string();
         let pool = pool_options
-            .connect(format!("sqlite:file:{file_name}?mode=memory&cache=shared").as_str())
+            .connect_with(options)
             .await
             .map_err(Self::map_sql_err)?;
         Ok(pool)
@@ -310,6 +466,21 @@ impl Clean {
     }
 }
 
+/// This function can be used to run some test code with the 2 SQLite databases implementations
+pub async fn with_sqlite_dbs<F, Fut>(f: F) -> Result<()>
+where
+    F: Fn(SqlxDatabase) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    let db = SqlxDatabase::in_memory("test").await?;
+    rethrow("SQLite in memory", f(db)).await?;
+
+    let db_file = NamedTempFile::new().unwrap();
+    let db = SqlxDatabase::create_sqlite(db_file.path()).await?;
+    rethrow("SQLite on disk", f(db)).await?;
+    Ok(())
+}
+
 /// This function can be used to run some test code with the 3 different databases implementations
 pub async fn with_dbs<F, Fut>(f: F) -> Result<()>
 where
@@ -323,10 +494,35 @@ where
     let db = SqlxDatabase::create_sqlite(db_file.path()).await?;
     rethrow("SQLite on disk", f(db)).await?;
 
-    // only run the postgres tests if the OCKAM_POSTGRES_* environment variables are set
+    // only run the postgres tests if the OCKAM_DATABASE_CONNECTION_URL environment variables is set
+    with_postgres(f).await?;
+    Ok(())
+}
+
+/// This function can be used to run some test code with a postgres database
+pub async fn with_postgres<F, Fut>(f: F) -> Result<()>
+where
+    F: Fn(SqlxDatabase) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    // only run the postgres tests if the OCKAM_DATABASE_CONNECTION_URL environment variables is set
     if let Ok(db) = SqlxDatabase::create_new_postgres().await {
+        db.truncate_all_postgres_tables().await?;
         rethrow("Postgres local", f(db.clone())).await?;
-        db.drop_all_postgres_tables().await?;
+    };
+    Ok(())
+}
+
+/// This function can be used to avoid running a test if the postgres database is used.
+pub async fn skip_if_postgres<F, Fut, R>(f: F) -> std::result::Result<(), R>
+where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = std::result::Result<(), R>> + Send + 'static,
+    R: From<Error>,
+{
+    // only run the postgres tests if the OCKAM_DATABASE_CONNECTION_URL environment variable is not set
+    if DatabaseConfiguration::postgres()?.is_none() {
+        f().await?
     };
     Ok(())
 }
@@ -345,7 +541,7 @@ where
     let db = SqlxDatabase::create_application_sqlite(db_file.path()).await?;
     rethrow("SQLite on disk", f(db)).await?;
 
-    // only run the postgres tests if the OCKAM_POSTGRES_* environment variables are set
+    // only run the postgres tests if the OCKAM_DATABASE_CONNECTION_URL environment variable is set
     if let Ok(db) = SqlxDatabase::create_new_application_postgres().await {
         rethrow("Postgres local", f(db.clone())).await?;
         db.drop_all_postgres_tables().await?;
@@ -423,6 +619,7 @@ pub fn create_temp_db_file() -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(missing_docs)]
 pub mod tests {
     use super::*;
     use crate::database::Boolean;
@@ -459,39 +656,65 @@ pub mod tests {
     /// This test checks that we can run a query and return an entity
     #[tokio::test]
     async fn test_query() -> Result<()> {
-        let db_file = NamedTempFile::new().unwrap();
-        let db_file = db_file.path();
-        let db = SqlxDatabase::create_sqlite(db_file).await?;
+        with_dbs(|db| async move {
+            insert_identity(&db).await.unwrap();
 
-        insert_identity(&db).await.unwrap();
+            // successful query
+            let result: Option<IdentifierRow> =
+                sqlx::query_as("SELECT identifier, name, vault_name, is_default FROM named_identity WHERE identifier = $1")
+                    .bind("Ifa804b7fca12a19eed206ae180b5b576860ae651")
+                    .fetch_optional(&*db.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                result,
+                Some(IdentifierRow {
+                    identifier: "Ifa804b7fca12a19eed206ae180b5b576860ae651".into(),
+                    name: "identity-1".to_string(),
+                    vault_name: "vault-1".to_string(),
+                    // This line tests the proper deserialization of a Boolean
+                    // in SQLite where a Boolean maps to an INTEGER
+                    is_default: Boolean::new(true),
+                })
+            );
 
-        // successful query
-        let result: Option<IdentifierRow> =
-            sqlx::query_as("SELECT identifier, name, vault_name, is_default FROM named_identity WHERE identifier = $1")
-                .bind("Ifa804b7fca12a19eed206ae180b5b576860ae651")
-                .fetch_optional(&*db.pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            result,
-            Some(IdentifierRow {
-                identifier: "Ifa804b7fca12a19eed206ae180b5b576860ae651".into(),
-                name: "identity-1".to_string(),
-                vault_name: "vault-1".to_string(),
-                // This line tests the proper deserialization of a Boolean
-                // in SQLite where a Boolean maps to an INTEGER
-                is_default: Boolean::new(true),
-            })
-        );
+            // failed query
+            let result: Option<IdentifierRow> =
+                sqlx::query_as("SELECT identifier FROM named_identity WHERE identifier = $1")
+                    .bind("x")
+                    .fetch_optional(&*db.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(result, None);
+            Ok(())
+        }).await
+    }
 
-        // failed query
-        let result: Option<IdentifierRow> =
-            sqlx::query_as("SELECT identifier FROM named_identity WHERE identifier = $1")
-                .bind("x")
-                .fetch_optional(&*db.pool)
-                .await
-                .unwrap();
-        assert_eq!(result, None);
+    #[tokio::test]
+    async fn test_create_pool_with_relative_and_absolute_paths() -> Result<()> {
+        install_default_drivers();
+        let relative = Path::new("relative");
+        let connection_string = DatabaseConfiguration::sqlite(relative).connection_string();
+        let options =
+            AnyConnectOptions::from_str(&connection_string).map_err(SqlxDatabase::map_sql_err)?;
+
+        let pool = Pool::<Any>::connect_with(options)
+            .await
+            .map_err(SqlxDatabase::map_sql_err);
+        assert!(pool.is_ok());
+
+        let absolute = std::fs::canonicalize(relative).unwrap();
+        let connection_string = DatabaseConfiguration::sqlite(&absolute).connection_string();
+        let options =
+            AnyConnectOptions::from_str(&connection_string).map_err(SqlxDatabase::map_sql_err)?;
+
+        let pool = Pool::<Any>::connect_with(options)
+            .await
+            .map_err(SqlxDatabase::map_sql_err);
+        assert!(pool.is_ok());
+
+        let _ = std::fs::remove_file(absolute);
+
         Ok(())
     }
 
