@@ -8,7 +8,7 @@ async fn main(ctx: Context) -> Result<()> {
     // Create a node with default implementations
     let mut node = node(ctx).await?;
     // Initialize the TCP Transport
-    let tcp = node.create_tcp_transport().await?;
+    let tcp = node.create_tcp_transport()?;
 
     // Create an Identity to represent Alice.
     let alice = node.create_identity().await?;
@@ -24,10 +24,10 @@ async fn main(ctx: Context) -> Result<()> {
 
     // Combine the tcp address of the node and the forwarding_address to get a route
     // to Bob's secure channel listener.
-    let node_in_hub = tcp
+    let node_in_orchestrator = tcp
         .connect("1.node.ockam.network:4000", TcpConnectionOptions::new())
         .await?;
-    let route_to_bob_listener = route![node_in_hub, forwarding_address, "listener"];
+    let route_to_bob_listener = route![node_in_orchestrator, forwarding_address, "listener"];
 
     // As Alice, connect to Bob's secure channel listener, and perform an
     // Authenticated Key Exchange to establish an encrypted secure channel with Bob.

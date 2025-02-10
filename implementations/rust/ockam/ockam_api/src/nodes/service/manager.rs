@@ -1,19 +1,22 @@
-use crate::cloud::project::Project;
-use crate::cloud::{AuthorityNodeClient, CredentialsEnabled, ProjectNodeClient};
 use crate::nodes::connection::{
-    Connection, ConnectionBuilder, PlainTcpInstantiator, ProjectInstantiator,
+    Connection, ConnectionBuilder, PlainTcpInstantiator, PlainUdpInstantiator, ProjectInstantiator,
     SecureChannelInstantiator,
 };
 use crate::nodes::models::portal::OutletStatus;
-use crate::nodes::models::transport::{TransportMode, TransportType};
+use crate::nodes::models::transport::{Port, TransportMode, TransportType};
 use crate::nodes::registry::Registry;
 use crate::nodes::service::http::HttpServer;
 use crate::nodes::service::{
     CredentialRetrieverCreators, NodeManagerCredentialRetrieverOptions, NodeManagerTrustOptions,
     SecureChannelType,
 };
+use crate::orchestrator::project::Project;
+use crate::orchestrator::{
+    AuthorityNodeClient, ControllerClient, CredentialsEnabled, ProjectNodeClient,
+};
 
-use crate::session::MedicHandle;
+use crate::cli_state::journeys::{NODE_NAME, USER_EMAIL, USER_NAME};
+use crate::logs::CurrentSpan;
 use crate::{ApiError, CliState, DefaultAddress};
 use miette::IntoDiagnostic;
 use ockam::identity::{
@@ -32,8 +35,8 @@ use ockam_abac::{
 };
 use ockam_core::flow_control::FlowControlId;
 use ockam_core::{
-    route, AllowAll, AsyncTryClone, CachedIncomingAccessControl, CachedOutgoingAccessControl,
-    IncomingAccessControl, OutgoingAccessControl,
+    route, AllowAll, CachedIncomingAccessControl, CachedOutgoingAccessControl,
+    IncomingAccessControl, OutgoingAccessControl, TryClone,
 };
 use ockam_multiaddr::MultiAddr;
 use ockam_node::Context;
@@ -50,7 +53,7 @@ pub struct NodeManager {
     pub(crate) cli_state: CliState,
     pub(super) node_name: String,
     pub(super) node_identifier: Identifier,
-    pub(super) api_transport_flow_control_id: FlowControlId,
+    pub(crate) api_transport_flow_control_ids: Vec<FlowControlId>,
     pub(crate) tcp_transport: TcpTransport,
     pub(crate) udp_transport: Option<UdpTransport>,
     pub(crate) secure_channels: Arc<SecureChannels>,
@@ -58,7 +61,6 @@ pub struct NodeManager {
     pub(crate) credential_retriever_creators: CredentialRetrieverCreators,
     pub(super) project_authority: Option<Identifier>,
     pub(crate) registry: Arc<Registry>,
-    pub(crate) medic_handle: MedicHandle,
 }
 
 impl NodeManager {
@@ -74,9 +76,6 @@ impl NodeManager {
         let node_name = general_options.node_name.clone();
 
         let registry = Arc::new(Registry::default());
-
-        debug!("start the medic");
-        let medic_handle = MedicHandle::start_medic(ctx, registry.clone()).await?;
 
         debug!("retrieve the node identifier");
         let node_identifier = cli_state.get_node(&node_name).await?.identifier();
@@ -102,8 +101,8 @@ impl NodeManager {
             }
             NodeManagerCredentialRetrieverOptions::Remote { info, scope } => {
                 Some(Arc::new(RemoteCredentialRetrieverCreator::new(
-                    ctx.async_try_clone().await?,
-                    Arc::new(transport_options.tcp_transport.clone()),
+                    ctx.try_clone()?,
+                    Arc::new(transport_options.tcp.transport.clone()),
                     secure_channels.clone(),
                     info.clone(),
                     scope,
@@ -127,8 +126,8 @@ impl NodeManager {
             }
             NodeManagerCredentialRetrieverOptions::Remote { info, scope } => {
                 Some(Arc::new(RemoteCredentialRetrieverCreator::new(
-                    ctx.async_try_clone().await?,
-                    Arc::new(transport_options.tcp_transport.clone()),
+                    ctx.try_clone()?,
+                    Arc::new(transport_options.tcp.transport.clone()),
                     secure_channels.clone(),
                     info.clone(),
                     scope,
@@ -145,19 +144,24 @@ impl NodeManager {
             _account_admin: None,
         };
 
+        let mut api_transport_flow_control_ids = vec![transport_options.tcp.flow_control_id];
+
+        if let Some(udp) = &transport_options.udp {
+            api_transport_flow_control_ids.push(udp.flow_control_id.clone());
+        }
+
         let mut s = Self {
             cli_state,
             node_name,
             node_identifier,
-            api_transport_flow_control_id: transport_options.api_transport_flow_control_id,
-            tcp_transport: transport_options.tcp_transport,
-            udp_transport: transport_options.udp_transport.clone(),
+            api_transport_flow_control_ids,
+            tcp_transport: transport_options.tcp.transport,
+            udp_transport: transport_options.udp.map(|u| u.transport),
             secure_channels,
             api_sc_listener: None,
             credential_retriever_creators,
             project_authority: trust_options.project_authority,
             registry,
-            medic_handle,
         };
 
         debug!("initializing services");
@@ -166,32 +170,37 @@ impl NodeManager {
 
         let s = Arc::new(s);
 
-        if let Some(http_server_port) = general_options.http_server_port {
-            debug!("start the http server");
-            HttpServer::start(s.clone(), http_server_port)
+        if let Some(status_endpoint_port) = general_options.status_endpoint_port {
+            HttpServer::start(ctx, s.clone(), status_endpoint_port)
                 .await
                 .map_err(|e| ApiError::core(e.to_string()))?;
         }
 
-        if let Some(udp_transport) = transport_options.udp_transport.as_ref() {
+        if let Some(udp) = &s.udp_transport {
             let rendezvous_route = route![
                 DefaultAddress::get_rendezvous_server_address(),
                 DefaultAddress::RENDEZVOUS_SERVICE
             ];
+
+            let options = UdpPunctureNegotiationListenerOptions::new();
+            let flow_control_id = options.flow_control_id();
+
             UdpPunctureNegotiationListener::create(
                 ctx,
                 DefaultAddress::UDP_PUNCTURE_NEGOTIATION_LISTENER,
-                udp_transport,
+                udp,
                 rendezvous_route,
-                UdpPunctureNegotiationListenerOptions::new(), // FIXME
-            )
-            .await?;
+                options,
+            )?;
 
             if let Some(api_sc_listener) = &s.api_sc_listener {
                 ctx.flow_controls().add_consumer(
-                    DefaultAddress::RENDEZVOUS_SERVICE,
+                    &DefaultAddress::RENDEZVOUS_SERVICE.into(),
                     api_sc_listener.flow_control_id(),
                 );
+
+                ctx.flow_controls()
+                    .add_consumer(api_sc_listener.address(), &flow_control_id);
             }
         }
 
@@ -203,13 +212,16 @@ impl NodeManager {
     async fn initialize_default_services(
         &self,
         ctx: &Context,
-        api_flow_control_id: &FlowControlId,
+        api_flow_control_ids: &[FlowControlId],
     ) -> ockam_core::Result<SecureChannelListener> {
         // Start services
-        ctx.flow_controls()
-            .add_consumer(DefaultAddress::UPPERCASE_SERVICE, api_flow_control_id);
-        self.start_uppercase_service_impl(ctx, DefaultAddress::UPPERCASE_SERVICE.into())
-            .await?;
+        for api_flow_control_id in api_flow_control_ids {
+            ctx.flow_controls().add_consumer(
+                &DefaultAddress::UPPERCASE_SERVICE.into(),
+                api_flow_control_id,
+            );
+        }
+        self.start_uppercase_service_impl(ctx, DefaultAddress::UPPERCASE_SERVICE.into())?;
 
         let secure_channel_listener = self
             .create_secure_channel_listener(
@@ -221,11 +233,15 @@ impl NodeManager {
             )
             .await?;
 
-        let options = RelayServiceOptions::new()
+        let mut options = RelayServiceOptions::new()
             .alias(DefaultAddress::STATIC_RELAY_SERVICE)
-            .service_as_consumer(api_flow_control_id)
-            .relay_as_consumer(api_flow_control_id)
             .prefix("forward_to_");
+
+        for api_flow_control_id in api_flow_control_ids {
+            options = options
+                .service_as_consumer(api_flow_control_id)
+                .relay_as_consumer(api_flow_control_id);
+        }
 
         let options = if let Some(authority) = &self.project_authority {
             let policy_access_control = self
@@ -252,7 +268,7 @@ impl NodeManager {
             options
         };
 
-        RelayService::create(ctx, DefaultAddress::RELAY_SERVICE, options).await?;
+        RelayService::create(ctx, DefaultAddress::RELAY_SERVICE, options)?;
 
         Ok(secure_channel_listener)
     }
@@ -262,35 +278,35 @@ impl NodeManager {
         ctx: &Context,
         start_default_services: bool,
     ) -> ockam_core::Result<()> {
-        let api_flow_control_id = self.api_transport_flow_control_id.clone();
+        // Always start the echoer service as ockam_api::Session assumes it will be
+        // started unconditionally on every node. It's used for liveliness checks.
+        self.start_echoer_service(ctx, DefaultAddress::ECHO_SERVICE.into())
+            .await?;
+        for api_flow_control_id in &self.api_transport_flow_control_ids {
+            ctx.flow_controls()
+                .add_consumer(&DefaultAddress::ECHO_SERVICE.into(), api_flow_control_id);
+        }
 
         if start_default_services {
             self.api_sc_listener = Some(
-                self.initialize_default_services(ctx, &api_flow_control_id)
+                self.initialize_default_services(ctx, &self.api_transport_flow_control_ids)
                     .await?,
             );
         }
-
-        // Always start the echoer service as ockam_api::Medic assumes it will be
-        // started unconditionally on every node. It's used for liveliness checks.
-        ctx.flow_controls()
-            .add_consumer(DefaultAddress::ECHO_SERVICE, &api_flow_control_id);
-        self.start_echoer_service(ctx, DefaultAddress::ECHO_SERVICE.into())
-            .await?;
 
         Ok(())
     }
 
     pub async fn make_connection(
         &self,
-        ctx: Arc<Context>,
-        addr: &MultiAddr,
+        ctx: &Context,
+        address: &MultiAddr,
         identifier: Identifier,
         authorized: Option<Identifier>,
         timeout: Option<Duration>,
     ) -> ockam_core::Result<Connection> {
         let authorized = authorized.map(|authorized| vec![authorized]);
-        self.connect(ctx, addr, identifier, authorized, timeout)
+        self.connect(ctx, address, identifier, authorized, timeout)
             .await
     }
 
@@ -298,32 +314,33 @@ impl NodeManager {
     /// Returns [`Connection`]
     async fn connect(
         &self,
-        ctx: Arc<Context>,
-        addr: &MultiAddr,
+        ctx: &Context,
+        address: &MultiAddr,
         identifier: Identifier,
         authorized: Option<Vec<Identifier>>,
         timeout: Option<Duration>,
     ) -> ockam_core::Result<Connection> {
-        debug!(?timeout, "connecting to {}", &addr);
-        let connection = ConnectionBuilder::new(addr.clone())
+        debug!(%address, ?timeout, "connecting");
+        let connection = ConnectionBuilder::new(address.clone())
             .instantiate(
-                ctx.clone(),
+                ctx,
                 self,
                 ProjectInstantiator::new(identifier.clone(), timeout),
             )
             .await?
-            .instantiate(ctx.clone(), self, PlainTcpInstantiator::new())
+            .instantiate(ctx, self, PlainTcpInstantiator::new())
+            .await?
+            .instantiate(ctx, self, PlainUdpInstantiator::new())
             .await?
             .instantiate(
-                ctx.clone(),
+                ctx,
                 self,
-                SecureChannelInstantiator::new(&identifier, timeout, authorized),
+                SecureChannelInstantiator::new(&identifier, timeout, authorized.clone()),
             )
             .await?
             .build();
         connection.add_default_consumers(ctx);
-
-        debug!("connected to {connection:?}");
+        info!(%address, %identifier, ?authorized, "connection established");
         Ok(connection)
     }
 
@@ -334,7 +351,9 @@ impl NodeManager {
         let project = self.cli_state.projects().get_project_by_name(name).await?;
         Ok((
             project.project_multiaddr()?.clone(),
-            project.project_identifier()?,
+            project
+                .project_identifier()
+                .ok_or_else(|| ApiError::core("no project identifier"))?,
         ))
     }
 
@@ -369,13 +388,19 @@ impl NodeManager {
         &self.tcp_transport
     }
 
-    pub async fn list_outlets(&self) -> Vec<OutletStatus> {
+    pub fn list_outlets(&self) -> Vec<OutletStatus> {
         self.registry
             .outlets
             .entries()
-            .await
             .iter()
-            .map(|(_, info)| OutletStatus::new(info.socket_addr, info.worker_addr.clone(), None))
+            .map(|(_, info)| {
+                OutletStatus::new(
+                    info.to.clone(),
+                    info.worker_addr.clone(),
+                    None,
+                    info.privileged,
+                )
+            })
             .collect()
     }
 
@@ -385,8 +410,34 @@ impl NodeManager {
         Ok(())
     }
 
-    pub async fn create_authority_client(
+    /// Wait until the project is ready to be used
+    /// At this stage the project authority node must be up and running
+    #[instrument(skip_all, fields(project_id = project.project_id()))]
+    pub async fn wait_until_project_is_ready(
         &self,
+        ctx: &Context,
+        project: &Project,
+    ) -> miette::Result<Project> {
+        if project.is_ready() {
+            return Ok(project.clone());
+        }
+
+        let project = self
+            .create_controller()
+            .await?
+            .wait_until_project_is_ready(ctx, project.model())
+            .await?;
+        let project = self
+            .cli_state
+            .projects()
+            .import_and_store_project(project.clone())
+            .await?;
+        Ok(project)
+    }
+
+    pub async fn create_authority_client_with_project(
+        &self,
+        ctx: &Context,
         project: &Project,
         caller_identity_name: Option<String>,
     ) -> miette::Result<AuthorityNodeClient> {
@@ -407,11 +458,56 @@ impl NodeManager {
             None
         };
 
+        // Make sure that the project is ready otherwise the next call will fail
+        let project = self.wait_until_project_is_ready(ctx, project).await?;
+
         self.make_authority_node_client(
-            &project.authority_identifier().into_diagnostic()?,
+            &project
+                .authority_identifier()
+                .ok_or_else(|| ApiError::core("no authority identifier"))
+                .into_diagnostic()?,
             project.authority_multiaddr().into_diagnostic()?,
             &caller_identifier,
             credential_retriever_creator,
+        )
+        .await
+        .into_diagnostic()
+    }
+
+    pub async fn create_authority_client_with_authority(
+        &self,
+        _ctx: &Context,
+        authority_identifier: &Identifier,
+        authority_route: &MultiAddr,
+        caller_identity_name: Option<String>,
+    ) -> miette::Result<AuthorityNodeClient> {
+        let caller_identifier = self
+            .get_identifier_by_name(caller_identity_name)
+            .await
+            .into_diagnostic()?;
+
+        self.make_authority_node_client(
+            authority_identifier,
+            authority_route,
+            &caller_identifier,
+            None,
+        )
+        .await
+        .into_diagnostic()
+    }
+
+    /// Return a Controller client to send requests to the Controller
+    pub async fn create_controller(&self) -> miette::Result<ControllerClient> {
+        if let Ok(user) = self.cli_state.get_default_user().await {
+            CurrentSpan::set_attribute(USER_NAME, &user.name);
+            CurrentSpan::set_attribute(USER_EMAIL, &user.email.to_string());
+        }
+        CurrentSpan::set_attribute(NODE_NAME, &self.node_name);
+
+        self.controller_node_client(
+            &self.tcp_transport,
+            self.secure_channels.clone(),
+            &self.identifier(),
         )
         .await
         .into_diagnostic()
@@ -437,7 +533,7 @@ impl NodeManager {
         .into_diagnostic()
     }
 
-    pub(super) async fn access_control(
+    pub(crate) async fn access_control(
         &self,
         ctx: &Context,
         authority: Option<Identifier>,
@@ -457,7 +553,7 @@ impl NodeManager {
                 .await?;
 
             let incoming_ac = policy_access_control.create_incoming();
-            let outgoing_ac = policy_access_control.create_outgoing(ctx).await?;
+            let outgoing_ac = policy_access_control.create_outgoing(ctx)?;
 
             cfg_if::cfg_if! {
                 if #[cfg(feature = "std")] {
@@ -536,7 +632,7 @@ pub struct NodeManagerGeneralOptions {
     pub(super) cli_state: CliState,
     pub(super) node_name: String,
     pub(super) start_default_services: bool,
-    pub(super) http_server_port: Option<u16>,
+    pub(super) status_endpoint_port: Option<Port>,
     pub(super) persistent: bool,
 }
 
@@ -545,14 +641,14 @@ impl NodeManagerGeneralOptions {
         cli_state: CliState,
         node_name: String,
         start_default_services: bool,
-        http_server_port: Option<u16>,
+        status_endpoint_port: Option<Port>,
         persistent: bool,
     ) -> Self {
         Self {
             cli_state,
             node_name,
             start_default_services,
-            http_server_port,
+            status_endpoint_port,
             persistent,
         }
     }
@@ -576,22 +672,38 @@ pub struct ApiTransport {
 }
 
 #[derive(Debug)]
+pub struct NodeManagerTransport<T> {
+    flow_control_id: FlowControlId,
+    transport: T,
+}
+
+impl<T> NodeManagerTransport<T> {
+    pub fn new(flow_control_id: FlowControlId, transport: T) -> Self {
+        Self {
+            flow_control_id,
+            transport,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct NodeManagerTransportOptions {
-    api_transport_flow_control_id: FlowControlId,
-    tcp_transport: TcpTransport,
-    udp_transport: Option<UdpTransport>,
+    tcp: NodeManagerTransport<TcpTransport>,
+    udp: Option<NodeManagerTransport<UdpTransport>>,
 }
 
 impl NodeManagerTransportOptions {
     pub fn new(
-        api_transport_flow_control_id: FlowControlId,
-        tcp_transport: TcpTransport,
-        udp_transport: Option<UdpTransport>,
+        tcp: NodeManagerTransport<TcpTransport>,
+        udp: Option<NodeManagerTransport<UdpTransport>>,
     ) -> Self {
+        Self { tcp, udp }
+    }
+
+    pub fn new_tcp(flow_control_id: FlowControlId, transport: TcpTransport) -> Self {
         Self {
-            api_transport_flow_control_id,
-            tcp_transport,
-            udp_transport,
+            tcp: NodeManagerTransport::new(flow_control_id, transport),
+            udp: None,
         }
     }
 }

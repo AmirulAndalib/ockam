@@ -1,5 +1,5 @@
 use crate::database::migrations::RustMigration;
-use crate::database::{Boolean, FromSqlxError, Nullable, ToVoid};
+use crate::database::{Boolean, FromSqlxError, Nullable, SqlxDatabase, ToVoid, Version};
 use ockam_core::{async_trait, Result};
 use sqlx::*;
 
@@ -13,19 +13,23 @@ impl RustMigration for AuthorityAttributes {
         Self::name()
     }
 
-    fn version(&self) -> i64 {
+    fn version(&self) -> Version {
         Self::version()
     }
 
-    async fn migrate(&self, connection: &mut AnyConnection) -> Result<bool> {
+    async fn migrate(
+        &self,
+        _legacy_sqlite_database: Option<SqlxDatabase>,
+        connection: &mut AnyConnection,
+    ) -> Result<()> {
         Self::migrate_authority_attributes_to_members(connection).await
     }
 }
 
 impl AuthorityAttributes {
     /// Migration version
-    pub fn version() -> i64 {
-        20240111100001
+    pub fn version() -> Version {
+        Version(20240111100001)
     }
 
     /// Migration name
@@ -37,7 +41,7 @@ impl AuthorityAttributes {
     /// Duplicate all attributes entry for every known node
     pub(crate) async fn migrate_authority_attributes_to_members(
         connection: &mut AnyConnection,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let mut transaction = Connection::begin(&mut *connection).await.into_core()?;
 
         let query_node_names = query_as("SELECT name, is_authority FROM node");
@@ -74,7 +78,7 @@ impl AuthorityAttributes {
 
         transaction.commit().await.void()?;
 
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -116,10 +120,8 @@ mod test {
     #[tokio::test]
     async fn test_migration() -> Result<()> {
         let db_file = NamedTempFile::new().unwrap();
-        let pool = SqlxDatabase::create_sqlite_connection_pool(db_file.path()).await?;
-
-        let mut connection = pool.acquire().await.into_core()?;
-
+        let db_file = db_file.path();
+        let pool = SqlxDatabase::create_sqlite_single_connection_pool(db_file).await?;
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to_skip_last_rust_migration(&pool, AuthorityAttributes::version())
@@ -128,6 +130,7 @@ mod test {
         let authority_node_name = "authority".to_string();
         let regular_node_name = "node".to_string();
 
+        let mut connection = pool.acquire().await.into_core()?;
         let insert_node1 = insert_node(authority_node_name.clone(), true);
         insert_node1.execute(&mut *connection).await.void()?;
         let insert_node2 = insert_node(regular_node_name.clone(), false);
@@ -153,11 +156,16 @@ mod test {
         );
         insert.execute(&mut *connection).await.void()?;
 
+        // SQLite EXCLUSIVE lock needs exactly one connection during the migration
+        drop(connection);
+
         // apply migrations
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to(&pool, AuthorityAttributes::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // check data
         let rows1: Vec<IdentityAttributesRow> =
@@ -199,7 +207,7 @@ mod test {
     /// HELPERS
     fn create_attributes(attributes: Vec<(Vec<u8>, Vec<u8>)>) -> Result<Vec<u8>> {
         let map: BTreeMap<Vec<u8>, Vec<u8>> = attributes.into_iter().collect();
-        Ok(minicbor::to_vec(map)?)
+        ockam_core::cbor_encode_preallocate(map)
     }
 
     fn insert_query(

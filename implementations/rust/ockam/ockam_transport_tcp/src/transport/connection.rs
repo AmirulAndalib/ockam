@@ -3,10 +3,12 @@ use crate::workers::{Addresses, TcpRecvProcessor, TcpSendWorker};
 use crate::{TcpConnectionMode, TcpConnectionOptions, TcpTransport};
 use core::fmt;
 use core::fmt::Formatter;
+use core::str::FromStr;
+use ockam_core::errcode::{Kind, Origin};
 use ockam_core::flow_control::FlowControlId;
 use ockam_core::{Address, Result};
 use ockam_node::Context;
-use ockam_transport_core::resolve_peer;
+use ockam_transport_core::HostnamePort;
 use std::net::SocketAddr;
 use tracing::debug;
 
@@ -36,6 +38,12 @@ impl From<TcpConnection> for Address {
     }
 }
 
+impl AsRef<Address> for TcpConnection {
+    fn as_ref(&self) -> &Address {
+        self.sender_address()
+    }
+}
+
 impl TcpConnection {
     /// Constructor
     pub fn new(
@@ -56,8 +64,8 @@ impl TcpConnection {
     /// Stops the [`TcpConnection`], this method must be called to avoid
     /// leakage of the connection.
     /// Simply dropping this object won't close the connection
-    pub async fn stop(&self, context: &Context) -> Result<()> {
-        context.stop_worker(self.sender_address.clone()).await
+    pub fn stop(&self, context: &Context) -> Result<()> {
+        context.stop_address(&self.sender_address)
     }
     /// Corresponding [`TcpSendWorker`](super::workers::TcpSendWorker) [`Address`] that can be used
     /// in a route to send messages to the other side of the TCP connection
@@ -90,7 +98,7 @@ impl TcpTransport {
     /// # use ockam_node::Context;
     /// # use ockam_core::Result;
     /// # async fn test(ctx: Context) -> Result<()> {
-    /// let tcp = TcpTransport::create(&ctx).await?;
+    /// let tcp = TcpTransport::create(&ctx)?;
     /// tcp.listen("127.0.0.1:8000", TcpListenerOptions::new()).await?; // Listen on port 8000
     /// let connection = tcp.connect("127.0.0.1:5000", TcpConnectionOptions::new()).await?; // and connect to port 5000
     /// # Ok(()) }
@@ -100,10 +108,13 @@ impl TcpTransport {
         peer: impl Into<String>,
         options: TcpConnectionOptions,
     ) -> Result<TcpConnection> {
-        let peer = peer.into();
-        let socket = resolve_peer(peer.clone())?;
+        let peer = HostnamePort::from_str(&peer.into())?;
         debug!("Connecting to {}", peer.clone());
-        let (read_half, write_half) = connect(socket).await?;
+
+        let (read_half, write_half) = connect(&peer, false, options.timeout).await?;
+        let socket = read_half
+            .peer_addr()
+            .map_err(|e| ockam_core::Error::new(Origin::Transport, Kind::Internal, e))?;
 
         let mode = TcpConnectionMode::Outgoing;
         let addresses = Addresses::generate(mode);
@@ -121,8 +132,7 @@ impl TcpTransport {
             socket,
             mode,
             &flow_control_id,
-        )
-        .await?;
+        )?;
 
         TcpRecvProcessor::start(
             &self.ctx,
@@ -133,8 +143,7 @@ impl TcpTransport {
             mode,
             &flow_control_id,
             receiver_outgoing_access_control,
-        )
-        .await?;
+        )?;
 
         Ok(TcpConnection::new(
             addresses.sender_address().clone(),
@@ -146,7 +155,7 @@ impl TcpTransport {
     }
 
     /// Interrupt an active TCP connection given its Sender `Address`
-    pub async fn disconnect(&self, address: impl Into<Address>) -> Result<()> {
-        self.ctx.stop_worker(address.into()).await
+    pub fn disconnect(&self, address: impl AsRef<Address>) -> Result<()> {
+        self.ctx.stop_address(address.as_ref())
     }
 }

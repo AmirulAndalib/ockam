@@ -4,6 +4,113 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.124.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+### Changed
+
+- Rename cloud module to orchestrator
+
+## 0.123.0 - 2025-01-09
+
+### Added
+
+- Introduce env variables to adjust transport performance
+- Updated dependencies
+
+## 0.122.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.121.0 - 2024-11-27
+
+### Added
+
+- Encoding and allocation optimizations for privileged portals
+- Updated dependencies
+
+## 0.120.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+### Fixed
+
+- In portals, check identity change only for remote packets
+- Error chain is kept in ockam_command crate
+
+## 0.119.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.118.0 - 2024-10-15
+
+### Added
+
+- Updated dependencies
+
+## 0.117.0 - 2024-09-23
+
+### Added
+
+- Added `TLS` inlet support
+- Implement influxdb token lessor service
+- Refactor influxdb api client to better handle error responses
+- Updated dependencies
+
+## 0.116.0 - 2024-08-14
+
+### Added
+
+- Added the possibility to encrypt specific fields in a kafka `JSON` record
+- Updated dependencies
+
+## 0.115.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.114.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.113.0 - 2024-07-29
+
+### Added
+
+- Updated dependencies
+
+## 0.112.0 - 2024-07-01
+
+### Added
+
+- Add `FIXME` to `ockam_core`
+- Change tcp protocol serialization
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
+### Changed
+
+- `project-member` commands, and adds the `show` command
+- `kafka-*` commands
+
+### Fixed
+
+- Account for `minicbor` length calculation bug
+
 ## 0.111.0 - 2024-06-25
 
 ### Added

@@ -2,8 +2,8 @@ use crate::cli_state::journeys::attributes::{
     default_attributes, make_host, make_host_trace_id, make_journey_span_id, make_project_trace_id,
 };
 use crate::cli_state::journeys::{Journey, JourneyEvent, ProjectJourney};
-use crate::cloud::project::Project;
 use crate::logs::CurrentSpan;
+use crate::orchestrator::project::Project;
 use crate::{CliState, Result};
 use chrono::{DateTime, Utc};
 use either::Either;
@@ -195,7 +195,7 @@ impl CliState {
                     &project_multiaddr.to_string(),
                 );
             }
-            if let Ok(project_identifier) = project.project_identifier() {
+            if let Some(project_identifier) = project.project_identifier() {
                 CurrentSpan::set_attribute(
                     APPLICATION_EVENT_PROJECT_IDENTIFIER,
                     &project_identifier.to_string(),
@@ -207,7 +207,7 @@ impl CliState {
                     &authority_multiaddr.to_string(),
                 );
             }
-            if let Ok(authority_identifier) = project.authority_identifier() {
+            if let Some(authority_identifier) = project.authority_identifier() {
                 CurrentSpan::set_attribute(
                     APPLICATION_EVENT_PROJECT_AUTHORITY_IDENTIFIER,
                     &authority_identifier.to_string(),

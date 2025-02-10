@@ -1,12 +1,13 @@
 use miette::IntoDiagnostic;
+use ockam::Context;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
 use ockam_api::authenticator::enrollment_tokens::TokenIssuer;
 use ockam_api::cli_state::enrollments::EnrollmentTicket;
-use ockam_api::cloud::email_address::EmailAddress;
-use ockam_api::cloud::project::ProjectsOrchestratorApi;
+use ockam_api::orchestrator::email_address::EmailAddress;
+use ockam_api::orchestrator::project::ProjectsOrchestratorApi;
 
 use crate::projects::error::Error::ListingFailed;
 use crate::state::{AppState, StateKind};
@@ -17,10 +18,11 @@ use super::error::{Error, Result};
 impl AppState {
     pub(crate) async fn create_enrollment_ticket(
         &self,
+        ctx: &Context,
         project_id: &str,
         invitation_email: &EmailAddress,
     ) -> Result<EnrollmentTicket> {
-        debug!(?project_id, "Creating enrollment ticket");
+        debug!(?project_id, "Creating an enrollment ticket");
         let projects = self.projects();
         let projects_guard = projects.read().await;
         let project = projects_guard
@@ -29,7 +31,7 @@ impl AppState {
             .ok_or_else(|| Error::ProjectNotFound(project_id.to_owned()))?
             .clone();
         let authority_node = self
-            .authority_node(&project, None)
+            .authority_node(ctx, &project, None)
             .await
             .into_diagnostic()?;
         let otc = authority_node
@@ -40,7 +42,10 @@ impl AppState {
                 None,
             )
             .await?;
-        Ok(EnrollmentTicket::new(otc, Some(project.model().clone())))
+        let ticket = EnrollmentTicket::new_from_project(otc, project.model())
+            .await
+            .into_diagnostic()?;
+        Ok(ticket)
     }
 
     pub(crate) async fn refresh_projects(&self) -> Result<()> {

@@ -1,11 +1,10 @@
 //! Inlets and outlet request/response types
 
 use std::fmt::{Display, Formatter};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use ockam::identity::Identifier;
 use ockam::transport::HostnamePort;
 use ockam_abac::PolicyExpression;
@@ -13,20 +12,21 @@ use ockam_core::{Address, IncomingAccessControl, OutgoingAccessControl, Route};
 use ockam_multiaddr::MultiAddr;
 use serde::{Deserialize, Serialize};
 
-use crate::colors::color_primary;
+use crate::colors::{color_primary, color_primary_alt};
 use crate::error::ApiError;
 
 use crate::output::Output;
-use crate::session::sessions::ConnectionStatus;
-use crate::{route_to_multiaddr, try_address_to_multiaddr};
+use crate::session::connection_status::ConnectionStatus;
+use crate::terminal::fmt;
+use crate::ReverseLocalConverter;
 
 /// Request body to create an inlet
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct CreateInlet {
     /// The address the portal should listen at.
-    #[n(1)] pub(crate) listen_addr: String,
+    #[n(1)] pub(crate) listen_addr: HostnamePort,
     /// The peer address.
     /// This can either be the address of an already
     /// created outlet, or a forwarding mechanism via ockam cloud.
@@ -37,84 +37,96 @@ pub struct CreateInlet {
     /// Only set for non-project addresses as for projects the project's
     /// authorised identity will be used.
     #[n(4)] pub(crate) authorized: Option<Identifier>,
-    /// A prefix route that will be applied before outlet_addr, and won't be used
-    /// to monitor the state of the connection
-    #[n(5)] pub(crate) prefix_route: Route,
-    /// A suffix route that will be applied after outlet_addr, and won't be used
-    /// to monitor the state of the connection
-    #[n(6)] pub(crate) suffix_route: Route,
     /// The maximum duration to wait for an outlet to be available
-    #[n(7)] pub(crate) wait_for_outlet_duration: Option<Duration>,
+    #[n(5)] pub(crate) wait_for_outlet_duration: Option<Duration>,
     /// The expression for the access control policy for this inlet.
     /// If not set, the policy set for the [TCP inlet resource type](ockam_abac::ResourceType::TcpInlet)
     /// will be used.
-    #[n(8)] pub(crate) policy_expression: Option<PolicyExpression>,
+    #[n(6)] pub(crate) policy_expression: Option<PolicyExpression>,
     /// Create the inlet and wait for the outlet to connect
-    #[n(9)] pub(crate) wait_connection: bool,
+    #[n(7)] pub(crate) wait_connection: bool,
     /// The identifier to be used to create the secure channel.
     /// If not set, the node's identifier will be used.
-    #[n(10)] pub(crate) secure_channel_identifier: Option<Identifier>,
+    #[n(8)] pub(crate) secure_channel_identifier: Option<Identifier>,
     /// Enable UDP NAT puncture.
-    #[n(11)] pub enable_udp_puncture: bool,
+    #[n(9)] pub(crate) enable_udp_puncture: bool,
     /// Disable fallback to TCP.
     /// TCP won't be used to transfer data between the Inlet and the Outlet.
-    #[n(12)] pub disable_tcp_fallback: bool,
+    #[n(11)] pub(crate) disable_tcp_fallback: bool,
+    /// Use eBPF and RawSocket to access TCP packets instead of TCP data stream.
+    #[n(12)] pub(crate) privileged: bool,
+    /// TLS certificate provider route.
+    #[n(13)] pub(crate) tls_certificate_provider: Option<MultiAddr>,
+    /// Skip Portal handshake for lower latency, but also lower throughput
+    #[n(14)] pub(crate) skip_handshake: bool,
+    /// Enable Nagle's algorithm for potentially higher throughput, but higher latency
+    #[n(15)] pub(crate) enable_nagle: bool,
 }
 
 impl CreateInlet {
     #[allow(clippy::too_many_arguments)]
     pub fn via_project(
-        listen: String,
+        listen: HostnamePort,
         to: MultiAddr,
         alias: String,
-        prefix_route: Route,
-        suffix_route: Route,
         wait_connection: bool,
         enable_udp_puncture: bool,
         disable_tcp_fallback: bool,
+        privileged: bool,
+        skip_handshake: bool,
+        enable_nagle: bool,
     ) -> Self {
         Self {
             listen_addr: listen,
             outlet_addr: to,
             alias,
             authorized: None,
-            prefix_route,
-            suffix_route,
             wait_for_outlet_duration: None,
             policy_expression: None,
             wait_connection,
             secure_channel_identifier: None,
             enable_udp_puncture,
             disable_tcp_fallback,
+            privileged,
+            tls_certificate_provider: None,
+            skip_handshake,
+            enable_nagle,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn to_node(
-        listen: String,
+        listen: HostnamePort,
         to: MultiAddr,
         alias: String,
-        prefix_route: Route,
-        suffix_route: Route,
         auth: Option<Identifier>,
         wait_connection: bool,
         enable_udp_puncture: bool,
         disable_tcp_fallback: bool,
+        privileged: bool,
+        skip_handshake: bool,
+        enable_nagle: bool,
     ) -> Self {
         Self {
             listen_addr: listen,
             outlet_addr: to,
             alias,
             authorized: auth,
-            prefix_route,
-            suffix_route,
             wait_for_outlet_duration: None,
             policy_expression: None,
             wait_connection,
             secure_channel_identifier: None,
             enable_udp_puncture,
             disable_tcp_fallback,
+            privileged,
+            tls_certificate_provider: None,
+            skip_handshake,
+            enable_nagle,
         }
+    }
+
+    pub fn set_tls_certificate_provider(&mut self, provider: MultiAddr) {
+        self.tls_certificate_provider = Some(provider);
     }
 
     pub fn set_wait_ms(&mut self, ms: u64) {
@@ -129,7 +141,7 @@ impl CreateInlet {
         self.secure_channel_identifier = Some(identifier);
     }
 
-    pub fn listen_addr(&self) -> String {
+    pub fn listen_addr(&self) -> HostnamePort {
         self.listen_addr.clone()
     }
 
@@ -145,21 +157,13 @@ impl CreateInlet {
         self.alias.clone()
     }
 
-    pub fn prefix_route(&self) -> &Route {
-        &self.prefix_route
-    }
-
-    pub fn suffix_route(&self) -> &Route {
-        &self.suffix_route
-    }
-
     pub fn wait_for_outlet_duration(&self) -> Option<Duration> {
         self.wait_for_outlet_duration
     }
 }
 
 /// Request body to create an outlet
-#[derive(Clone, Debug, Decode, Encode)]
+#[derive(Clone, Debug, Encode, Decode, CborLen)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct CreateOutlet {
@@ -176,6 +180,12 @@ pub struct CreateOutlet {
     /// If not set, the policy set for the [TCP outlet resource type](ockam_abac::ResourceType::TcpOutlet)
     /// will be used.
     #[n(5)] pub policy_expression: Option<PolicyExpression>,
+    /// Use eBPF and RawSocket to access TCP packets instead of TCP data stream.
+    #[n(6)] pub privileged: bool,
+    /// Skip Portal handshake for lower latency, but also lower throughput
+    #[n(7)] pub skip_handshake: bool,
+    /// Enable Nagle's algorithm for potentially higher throughput, but higher latency
+    #[n(8)] pub(crate) enable_nagle: bool,
 }
 
 impl CreateOutlet {
@@ -184,6 +194,9 @@ impl CreateOutlet {
         tls: bool,
         worker_addr: Option<Address>,
         reachable_from_default_secure_channel: bool,
+        privileged: bool,
+        skip_handshake: bool,
+        enable_nagle: bool,
     ) -> Self {
         Self {
             hostname_port,
@@ -191,6 +204,9 @@ impl CreateOutlet {
             worker_addr,
             reachable_from_default_secure_channel,
             policy_expression: None,
+            privileged,
+            skip_handshake,
+            enable_nagle,
         }
     }
 
@@ -200,7 +216,7 @@ impl CreateOutlet {
 }
 
 /// Response body when interacting with a portal endpoint
-#[derive(Clone, Debug, Decode, Encode, Serialize)]
+#[derive(Clone, Debug, Encode, Decode, CborLen, Serialize)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct InletStatus {
@@ -212,6 +228,7 @@ pub struct InletStatus {
     #[n(5)] pub outlet_route: Option<String>,
     #[n(6)] pub status: ConnectionStatus,
     #[n(7)] pub outlet_addr: String,
+    #[n(8)] pub privileged: bool,
 }
 
 impl InletStatus {
@@ -224,6 +241,7 @@ impl InletStatus {
         outlet_route: impl Into<Option<String>>,
         status: ConnectionStatus,
         outlet_addr: impl Into<String>,
+        privileged: bool,
     ) -> Self {
         Self {
             bind_addr: bind_addr.into(),
@@ -233,15 +251,17 @@ impl InletStatus {
             outlet_route: outlet_route.into(),
             status,
             outlet_addr: outlet_addr.into(),
+            privileged,
         }
     }
 }
 
 impl Display for InletStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
-            "Inlet at {} is {}",
+            "Inlet {} at {} is {}",
+            color_primary(&self.alias),
             color_primary(&self.bind_addr),
             self.status,
         )?;
@@ -249,9 +269,28 @@ impl Display for InletStatus {
             .outlet_route
             .as_ref()
             .and_then(Route::parse)
-            .and_then(|r| route_to_multiaddr(&r))
+            .and_then(|r| ReverseLocalConverter::convert_route(&r).ok())
         {
-            write!(f, " with route to outlet {}", color_primary(r.to_string()))?;
+            writeln!(
+                f,
+                "{}With route to outlet {}",
+                fmt::INDENTATION,
+                color_primary(r.to_string())
+            )?;
+        }
+        writeln!(
+            f,
+            "{}Outlet Address: {}",
+            fmt::INDENTATION,
+            color_primary(&self.outlet_addr)
+        )?;
+        if self.privileged {
+            writeln!(
+                f,
+                "{}This Inlet is operating in {} mode",
+                fmt::INDENTATION,
+                color_primary_alt("privileged".to_string())
+            )?;
         }
         Ok(())
     }
@@ -259,41 +298,43 @@ impl Display for InletStatus {
 
 impl Output for InletStatus {
     fn item(&self) -> crate::Result<String> {
-        Ok(format!("{}", self))
+        Ok(self.padded_display())
     }
 }
 
 /// Response body when interacting with a portal endpoint
-#[derive(Clone, Debug, Decode, Encode, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, CborLen, Serialize, Deserialize, PartialEq)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct OutletStatus {
-    #[n(1)] pub socket_addr: SocketAddr,
+    #[n(1)] pub to: HostnamePort,
     #[n(2)] pub worker_addr: Address,
     /// An optional status payload
     #[n(3)] pub payload: Option<String>,
+    #[n(4)] pub privileged: bool,
 }
 
 impl OutletStatus {
     pub fn new(
-        socket_addr: SocketAddr,
+        to: HostnamePort,
         worker_addr: Address,
         payload: impl Into<Option<String>>,
+        privileged: bool,
     ) -> Self {
         Self {
-            socket_addr,
+            to,
             worker_addr,
             payload: payload.into(),
+            privileged,
         }
     }
 
-    pub fn worker_address(&self) -> Result<MultiAddr, ockam_core::Error> {
-        try_address_to_multiaddr(&self.worker_addr)
-            .map_err(|_| ApiError::core("Invalid Worker Address"))
+    pub fn worker_route(&self) -> Result<MultiAddr, ockam_core::Error> {
+        ReverseLocalConverter::convert_address(&self.worker_addr)
     }
 
     pub fn worker_name(&self) -> Result<String, ockam_core::Error> {
-        match self.worker_address()?.last() {
+        match self.worker_route()?.last() {
             Some(worker_name) => String::from_utf8(worker_name.data().to_vec())
                 .map_err(|_| ApiError::core("Invalid Worker Address")),
             None => Ok(self.worker_addr.to_string()),
@@ -307,18 +348,29 @@ impl Display for OutletStatus {
             f,
             "Outlet at {} is connected to {}",
             color_primary(
-                self.worker_address()
+                self.worker_route()
                     .map_err(|_| std::fmt::Error)?
                     .to_string()
             ),
-            color_primary(self.socket_addr.to_string()),
-        )
+            color_primary(self.to.to_string()),
+        )?;
+
+        if self.privileged {
+            writeln!(
+                f,
+                "{}This Outlet is operating in {} mode",
+                fmt::INDENTATION,
+                color_primary_alt("privileged".to_string())
+            )?;
+        }
+
+        Ok(())
     }
 }
 
 impl Output for OutletStatus {
     fn item(&self) -> Result<String, ApiError> {
-        Ok(format!("{}", &self))
+        Ok(self.padded_display())
     }
 }
 

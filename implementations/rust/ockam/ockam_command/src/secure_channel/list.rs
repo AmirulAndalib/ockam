@@ -10,12 +10,11 @@ use ockam::Context;
 use ockam_api::colors::OckamColor;
 use ockam_api::nodes::models::secure_channel::ShowSecureChannelResponse;
 use ockam_api::nodes::BackgroundNodeClient;
-use ockam_api::route_to_multiaddr;
 use ockam_core::{route, Address, Result};
 
-use crate::util::async_cmd;
 use crate::{docs, util::api, CommandGlobalOpts};
 use ockam_api::output::Output;
+use ockam_api::ReverseLocalConverter;
 
 const LONG_ABOUT: &str = include_str!("./static/list/long_about.txt");
 const PREVIEW_TAG: &str = include_str!("../static/preview_tag.txt");
@@ -36,12 +35,6 @@ pub struct ListCommand {
 }
 
 impl ListCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "secure-channel list".into()
     }
@@ -55,9 +48,8 @@ impl ListCommand {
         let from = node_name.to_string();
         let at = {
             let channel_route = &route![channel_address];
-            let channel_multiaddr = route_to_multiaddr(channel_route).ok_or(miette!(
-                "Failed to convert route {channel_route} to multi-address"
-            ))?;
+            let channel_multiaddr = ReverseLocalConverter::convert_route(channel_route)
+                .map_err(|_| miette!("Failed to convert route {channel_route} to multi-address"))?;
             channel_multiaddr.to_string()
         };
 
@@ -69,8 +61,8 @@ impl ListCommand {
                 .split(" => ")
                 .map(|p| {
                     let r = route![p];
-                    route_to_multiaddr(&r)
-                        .ok_or(miette!("Failed to convert route {r} to multi-address"))
+                    ReverseLocalConverter::convert_route(&r)
+                        .map_err(|_| miette!("Failed to convert route {r} to multi-address"))
                 })
                 .collect::<Result<Vec<_>, _>>()?
                 .iter()
@@ -82,7 +74,7 @@ impl ListCommand {
         Ok(SecureChannelListOutput { from, to, at })
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         let node = BackgroundNodeClient::create(ctx, &opts.state, &self.at).await?;
 
         let is_finished: Mutex<bool> = Mutex::new(false);
@@ -105,7 +97,7 @@ impl ListCommand {
                 let request = api::show_secure_channel(&Address::from(channel_addr));
                 let show_response: ShowSecureChannelResponse = node.ask(ctx, request).await?;
                 let secure_channel_output =
-                    self.build_output(&node.node_name(), channel_addr, show_response)?;
+                    self.build_output(node.node_name(), channel_addr, show_response)?;
                 *is_finished.lock().await = true;
                 Ok(secure_channel_output)
             };

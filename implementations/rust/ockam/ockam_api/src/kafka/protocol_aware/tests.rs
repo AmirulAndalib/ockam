@@ -1,10 +1,12 @@
 #[cfg(test)]
 mod test {
     use crate::kafka::inlet_controller::KafkaInletController;
+    use crate::kafka::key_exchange::controller::KafkaKeyExchangeControllerImpl;
+    use crate::kafka::protocol_aware::inlet::InletInterceptorImpl;
     use crate::kafka::protocol_aware::utils::{encode_request, encode_response};
-    use crate::kafka::protocol_aware::InletInterceptorImpl;
-    use crate::kafka::protocol_aware::KafkaMessageInterceptor;
-    use crate::kafka::secure_channel_map::controller::KafkaSecureChannelControllerImpl;
+    use crate::kafka::protocol_aware::{
+        KafkaMessageRequestInterceptor, KafkaMessageResponseInterceptor,
+    };
     use crate::kafka::{ConsumerPublishing, ConsumerResolution};
     use crate::port_range::PortRange;
     use crate::test_utils::TestNode;
@@ -12,11 +14,12 @@ mod test {
     use kafka_protocol::messages::BrokerId;
     use kafka_protocol::messages::{ApiVersionsRequest, MetadataRequest, MetadataResponse};
     use kafka_protocol::messages::{ApiVersionsResponse, RequestHeader, ResponseHeader};
-    use kafka_protocol::protocol::{Builder, StrBytes};
+    use kafka_protocol::protocol::StrBytes;
     use ockam_abac::{Action, Env, Resource, ResourceType};
     use ockam_core::route;
     use ockam_multiaddr::MultiAddr;
     use ockam_node::Context;
+    use std::sync::Arc;
 
     #[allow(non_snake_case)]
     #[ockam_macros::test(timeout = 5_000)]
@@ -27,10 +30,11 @@ mod test {
         let handle = crate::test_utils::start_manager_for_tests(context, None, None).await?;
 
         let inlet_map = KafkaInletController::new(
+            (*handle.node_manager).clone(),
             MultiAddr::default(),
             route![],
             route![],
-            [127, 0, 0, 1].into(),
+            "127.0.0.1".to_string(),
             PortRange::new(0, 0).unwrap(),
             None,
         );
@@ -54,7 +58,7 @@ mod test {
             Some(handle.node_manager.identifier()),
         );
 
-        let secure_channel_controller = KafkaSecureChannelControllerImpl::new(
+        let secure_channel_controller = KafkaKeyExchangeControllerImpl::new(
             (*handle.node_manager).clone(),
             secure_channels,
             ConsumerResolution::None,
@@ -64,10 +68,11 @@ mod test {
         );
 
         let interceptor = InletInterceptorImpl::new(
-            secure_channel_controller,
+            Arc::new(secure_channel_controller),
             Default::default(),
             inlet_map,
             true,
+            vec![],
         );
 
         let mut correlation_id = 0;
@@ -77,22 +82,15 @@ mod test {
                 .intercept_request(
                     context,
                     encode_request(
-                        &RequestHeader::builder()
-                            .request_api_version(api_version)
-                            .correlation_id(correlation_id)
-                            .request_api_key(ApiKey::ApiVersionsKey as i16)
-                            .unknown_tagged_fields(Default::default())
-                            .client_id(None)
-                            .build()
-                            .unwrap(),
-                        &ApiVersionsRequest::builder()
-                            .client_software_name(StrBytes::from_static_str("mr. software"))
-                            .client_software_version(StrBytes::from_static_str("1.0.0"))
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
+                        &RequestHeader::default()
+                            .with_request_api_version(api_version)
+                            .with_correlation_id(correlation_id)
+                            .with_request_api_key(ApiKey::ApiVersions as i16),
+                        &ApiVersionsRequest::default()
+                            .with_client_software_name(StrBytes::from_static_str("mr. software"))
+                            .with_client_software_version(StrBytes::from_static_str("1.0.0")),
                         api_version,
-                        ApiKey::ApiVersionsKey,
+                        ApiKey::ApiVersions,
                     )
                     .unwrap(),
                 )
@@ -106,23 +104,10 @@ mod test {
                 .intercept_response(
                     context,
                     encode_response(
-                        &ResponseHeader::builder()
-                            .correlation_id(correlation_id)
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
-                        &ApiVersionsResponse::builder()
-                            .error_code(0)
-                            .api_keys(Default::default())
-                            .throttle_time_ms(0)
-                            .supported_features(Default::default())
-                            .finalized_features_epoch(0)
-                            .finalized_features(Default::default())
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
+                        &ResponseHeader::default().with_correlation_id(correlation_id),
+                        &ApiVersionsResponse::default(),
                         api_version,
-                        ApiKey::ApiVersionsKey,
+                        ApiKey::ApiVersions,
                     )
                     .unwrap(),
                 )
@@ -140,24 +125,13 @@ mod test {
                 .intercept_request(
                     context,
                     encode_request(
-                        &RequestHeader::builder()
-                            .request_api_version(api_version)
-                            .correlation_id(correlation_id)
-                            .request_api_key(ApiKey::MetadataKey as i16)
-                            .unknown_tagged_fields(Default::default())
-                            .client_id(None)
-                            .build()
-                            .unwrap(),
-                        &MetadataRequest::builder()
-                            .topics(None)
-                            .allow_auto_topic_creation(true)
-                            .include_cluster_authorized_operations(false)
-                            .include_topic_authorized_operations(false)
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
+                        &RequestHeader::default()
+                            .with_request_api_version(api_version)
+                            .with_correlation_id(correlation_id)
+                            .with_request_api_key(ApiKey::Metadata as i16),
+                        &MetadataRequest::default(),
                         api_version,
-                        ApiKey::MetadataKey,
+                        ApiKey::Metadata,
                     )
                     .unwrap(),
                 )
@@ -171,23 +145,10 @@ mod test {
                 .intercept_response(
                     context,
                     encode_response(
-                        &ResponseHeader::builder()
-                            .correlation_id(correlation_id)
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
-                        &MetadataResponse::builder()
-                            .throttle_time_ms(0)
-                            .brokers(Default::default())
-                            .cluster_id(None)
-                            .controller_id(BrokerId::from(0_i32))
-                            .cluster_authorized_operations(-2147483648)
-                            .topics(Default::default())
-                            .unknown_tagged_fields(Default::default())
-                            .build()
-                            .unwrap(),
+                        &ResponseHeader::default().with_correlation_id(correlation_id),
+                        &MetadataResponse::default().with_controller_id(BrokerId::from(0_i32)),
                         api_version,
-                        ApiKey::MetadataKey,
+                        ApiKey::Metadata,
                     )
                     .unwrap(),
                 )

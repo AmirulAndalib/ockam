@@ -1,23 +1,27 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 use tracing_attributes::instrument;
 
 use ockam_core::compat::boxed::Box;
 use ockam_core::compat::sync::{Arc, RwLock};
 use ockam_core::compat::vec::Vec;
 use ockam_core::errcode::{Kind, Origin};
-use ockam_core::{async_trait, route, Decodable, Error, LocalMessage, Route};
+use ockam_core::{
+    async_trait, route, CowBytes, Decodable, Error, LocalMessage, NeutralMessage, Route,
+};
 use ockam_core::{Any, Result, Routed, Worker};
 use ockam_node::Context;
 
 use crate::models::CredentialAndPurposeKey;
 use crate::secure_channel::addresses::Addresses;
 use crate::secure_channel::api::{EncryptionRequest, EncryptionResponse};
-use crate::secure_channel::encryptor::{Encryptor, SIZE_OF_ENCRYPT_OVERHEAD};
+use crate::secure_channel::encryptor::Encryptor;
+use crate::secure_channel::handshake::handshake::AES_GCM_TAGSIZE;
 use crate::{
     ChangeHistoryRepository, CredentialRetriever, Identifier, IdentityError, Nonce,
     PlaintextPayloadMessage, RefreshCredentialsMessage, SecureChannelMessage,
+    SecureChannelPaddedMessage, NOISE_NONCE_LEN,
 };
 
 /// Wrap last received (during successful decryption) nonce and current route to the remote in a
@@ -90,30 +94,34 @@ impl EncryptorWorker {
     }
 
     /// Encrypt the message
-    async fn encrypt(&mut self, ctx: &Context, msg: SecureChannelMessage<'_>) -> Result<Vec<u8>> {
-        let payload = minicbor::to_vec(&msg)?;
-        let mut buffer = Vec::new();
-        self.encrypt_to(ctx, &mut buffer, &payload).await?;
-        Ok(buffer)
-    }
-
-    async fn encrypt_to(
+    async fn encrypt(
         &mut self,
         ctx: &Context,
-        destination: &mut Vec<u8>,
-        payload: &[u8],
-    ) -> Result<()> {
-        // by reserving the capacity beforehand, we can avoid copying memory later
-        destination.reserve(SIZE_OF_ENCRYPT_OVERHEAD + payload.len());
+        msg: SecureChannelPaddedMessage<'static>,
+    ) -> Result<Vec<u8>> {
+        trace!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "encrypting message");
 
-        match self.encryptor.encrypt(destination, payload).await {
-            Ok(()) => Ok(()),
+        let expected_len = minicbor::len(&msg);
+        let mut destination = vec![0u8; NOISE_NONCE_LEN + expected_len + AES_GCM_TAGSIZE];
+        minicbor::encode(&msg, &mut destination[NOISE_NONCE_LEN..])?;
+
+        match self.encryptor.encrypt(&mut destination).await {
+            Ok(()) => {
+                trace!(
+                    role=%self.role,
+                    encryptor=%self.addresses.encryptor,
+                    "message encrypted");
+                Ok(destination)
+            }
             // If encryption failed, that means we have some internal error,
             // and we may be in an invalid state, it's better to stop the Worker
             Err(err) => {
-                let address = self.addresses.encryptor.clone();
+                let address = &self.addresses.encryptor;
                 error!("Error while encrypting: {err} at: {address}");
-                ctx.stop_worker(address).await?;
+                ctx.stop_address(address)?;
                 Err(err)
             }
         }
@@ -125,23 +133,26 @@ impl EncryptorWorker {
         ctx: &mut <Self as Worker>::Context,
         msg: Routed<<Self as Worker>::Message>,
     ) -> Result<()> {
-        debug!(
-            "SecureChannel {} received Encrypt API {}",
-            self.role, &self.addresses.encryptor
-        );
+        trace!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "handling encrypt API message");
 
-        let return_route = msg.return_route();
+        let msg = msg.into_local_message();
+        let return_route = msg.return_route;
 
         // Decode raw payload binary
-        let request = EncryptionRequest::decode(msg.payload())?;
+        let request = EncryptionRequest::decode(&msg.payload)?;
 
         let mut should_stop = false;
-        let mut encrypted_payload = Vec::new();
+        let len = NOISE_NONCE_LEN + request.0.len() + AES_GCM_TAGSIZE;
+        let mut encrypted_payload = vec![0u8; len];
+        encrypted_payload[NOISE_NONCE_LEN..len - AES_GCM_TAGSIZE].copy_from_slice(&request.0);
 
         // Encrypt the message
         let response = match self
             .encryptor
-            .encrypt(&mut encrypted_payload, &request.0)
+            .encrypt(encrypted_payload.as_mut_slice())
             .await
         {
             Ok(()) => EncryptionResponse::Ok(encrypted_payload),
@@ -161,8 +172,13 @@ impl EncryptorWorker {
         ctx.send_from_address(return_route, response, self.addresses.encryptor_api.clone())
             .await?;
 
+        trace!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "sent encrypt API response");
+
         if should_stop {
-            ctx.stop_worker(self.addresses.encryptor.clone()).await?;
+            ctx.stop_address(&self.addresses.encryptor)?;
         }
 
         Ok(())
@@ -174,56 +190,29 @@ impl EncryptorWorker {
         ctx: &mut <Self as Worker>::Context,
         msg: Routed<<Self as Worker>::Message>,
     ) -> Result<()> {
-        debug!(
-            "SecureChannel {} received Encrypt {}",
-            self.role, &self.addresses.encryptor
-        );
+        trace!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "handling encrypt message");
 
-        let mut onward_route = msg.onward_route();
-        let return_route = msg.return_route();
+        let msg = msg.into_local_message();
+        let mut onward_route = msg.onward_route;
+        let return_route = msg.return_route;
 
         // Remove our address
         let _ = onward_route.step();
 
-        let payload = msg.into_payload();
+        let payload = CowBytes::from(msg.payload);
         let msg = PlaintextPayloadMessage {
             onward_route,
             return_route,
-            payload: &payload,
+            payload,
         };
+
         let msg = SecureChannelMessage::Payload(msg);
+        let msg = Self::add_padding(msg);
 
-        let payload = {
-            // This is a workaround to keep backcompatibility with an extra
-            // bare encoding of the raw message (Vec<u8>).
-            // In bare, a variable length array is simply represented by a
-            // variable length integer followed by the raw bytes.
-            // The idea is first to calculate the size of the encrypted payload,
-            // so we can calculate the size of the variable length integer.
-            // The goal is to prepend the variable length integer to the buffer
-            // before it's actually written, so we can write the whole encrypted
-            // payload without any extra copies.
-
-            let encoded_payload = minicbor::to_vec(&msg)?;
-            // we assume this calculation is exact
-            let encrypted_payload_size = SIZE_OF_ENCRYPT_OVERHEAD + encoded_payload.len();
-            let variable_length_integer =
-                ockam_core::bare::size_of_variable_length(encrypted_payload_size as u64);
-            let mut buffer = Vec::with_capacity(encrypted_payload_size + variable_length_integer);
-
-            ockam_core::bare::write_variable_length_integer(
-                &mut buffer,
-                encrypted_payload_size as u64,
-            );
-
-            self.encrypt_to(ctx, &mut buffer, &encoded_payload).await?;
-            assert_eq!(
-                buffer.len() - variable_length_integer,
-                encrypted_payload_size
-            );
-
-            buffer
-        };
+        let payload = self.encrypt(ctx, msg).await?;
 
         let remote_route = self.shared_state.remote_route.read().unwrap().route.clone();
         // Decryptor doesn't need the return_route since it has `self.remote_route` as well
@@ -235,6 +224,11 @@ impl EncryptorWorker {
         ctx.forward_from_address(msg, self.addresses.encryptor.clone())
             .await?;
 
+        debug!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "forwarded message to decryptor");
+
         Ok(())
     }
 
@@ -242,7 +236,7 @@ impl EncryptorWorker {
     /// the latest change_history
     #[instrument(skip_all)]
     async fn handle_refresh_credentials(&mut self, ctx: &<Self as Worker>::Context) -> Result<()> {
-        debug!(
+        trace!(
             "Started credentials refresh for {}",
             self.addresses.encryptor
         );
@@ -292,6 +286,7 @@ impl EncryptorWorker {
             credentials: vec![credential.clone()],
         };
         let msg = SecureChannelMessage::RefreshCredentials(msg);
+        let msg = Self::add_padding(msg);
 
         let msg = self.encrypt(ctx, msg).await?;
 
@@ -302,8 +297,17 @@ impl EncryptorWorker {
 
         let remote_route = self.shared_state.remote_route.read().unwrap().route.clone();
         // Send the message to the decryptor on the other side
-        ctx.send_from_address(remote_route, msg, self.addresses.encryptor.clone())
-            .await?;
+        ctx.send_from_address(
+            remote_route,
+            NeutralMessage::from(msg),
+            self.addresses.encryptor.clone(),
+        )
+        .await?;
+
+        trace!(
+            role=%self.role,
+            encryptor=%self.addresses.encryptor,
+            "credentials refresh sent");
 
         self.last_presented_credential = Some(credential);
 
@@ -312,16 +316,34 @@ impl EncryptorWorker {
 
     async fn send_close_channel(&mut self, ctx: &Context) -> Result<()> {
         let msg = SecureChannelMessage::Close;
+        let msg = Self::add_padding(msg);
 
         // Encrypt the message
         let msg = self.encrypt(ctx, msg).await?;
 
         let remote_route = self.shared_state.remote_route.read().unwrap().route.clone();
         // Send the message to the decryptor on the other side
-        ctx.send_from_address(remote_route, msg, self.addresses.encryptor.clone())
-            .await?;
+        ctx.send_from_address(
+            remote_route,
+            NeutralMessage::from(msg),
+            self.addresses.encryptor.clone(),
+        )
+        .await?;
 
         Ok(())
+    }
+
+    fn add_padding(msg: SecureChannelMessage) -> SecureChannelPaddedMessage {
+        // Naїve padding of 0 to 255 zeros
+        // let padding_length: u8 = ockam_core::compat::rand::random();
+        // let padding = vec![0u8; padding_length as usize];
+
+        let padding = vec![];
+
+        SecureChannelPaddedMessage {
+            message: msg,
+            padding: padding.into(),
+        }
     }
 }
 
@@ -338,7 +360,7 @@ impl Worker for EncryptorWorker {
         Ok(())
     }
 
-    #[instrument(skip_all, name = "EncryptorWorker::handle_message", fields(worker = % ctx.address()))]
+    #[instrument(skip_all, name = "EncryptorWorker::handle_message", fields(worker = % ctx.primary_address()))]
     async fn handle_message(
         &mut self,
         ctx: &mut Self::Context,
@@ -347,16 +369,16 @@ impl Worker for EncryptorWorker {
         let msg_addr = msg.msg_addr();
 
         if self.key_exchange_only {
-            if msg_addr == self.addresses.encryptor_api {
+            if msg_addr == &self.addresses.encryptor_api {
                 self.handle_encrypt_api(ctx, msg).await?;
             } else {
                 return Err(IdentityError::UnknownChannelMsgDestination)?;
             }
-        } else if msg_addr == self.addresses.encryptor {
+        } else if msg_addr == &self.addresses.encryptor {
             self.handle_encrypt(ctx, msg).await?;
-        } else if msg_addr == self.addresses.encryptor_api {
+        } else if msg_addr == &self.addresses.encryptor_api {
             self.handle_encrypt_api(ctx, msg).await?;
-        } else if msg_addr == self.addresses.encryptor_internal {
+        } else if msg_addr == &self.addresses.encryptor_internal {
             self.handle_refresh_credentials(ctx).await?;
         } else {
             return Err(IdentityError::UnknownChannelMsgDestination)?;
@@ -371,9 +393,7 @@ impl Worker for EncryptorWorker {
             credential_retriever.unsubscribe(&self.addresses.encryptor_internal)?;
         }
 
-        let _ = context
-            .stop_worker(self.addresses.decryptor_internal.clone())
-            .await;
+        let _ = context.stop_address(&self.addresses.decryptor_internal);
         if self.shared_state.should_send_close.load(Ordering::Relaxed) {
             let _ = self.send_close_channel(context).await;
         }

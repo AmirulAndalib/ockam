@@ -1,5 +1,6 @@
 use crate::util::parsers::duration_parser;
 use clap::Args;
+use ockam::identity::models::ChangeHistory;
 use ockam_core::env::get_env;
 use ockam_multiaddr::MultiAddr;
 use std::time::Duration;
@@ -18,8 +19,8 @@ pub struct TrustOpts {
     pub project_name: Option<String>,
 
     /// Hex encoded Identity
-    #[arg(long, value_name = "IDENTITY")]
-    pub authority_identity: Option<String>,
+    #[arg(long, value_name = "IDENTITY", value_parser = ChangeHistory::import_from_string)]
+    pub authority_identity: Option<ChangeHistory>,
 
     /// Address to the Authority node
     #[arg(long)]
@@ -85,13 +86,13 @@ impl RetryOpts {
 #[derive(Debug, Clone, Args)]
 pub struct TimeoutArg {
     /// Override the default timeout duration that the command will wait for a response
-    #[arg(long, value_name = "TIMEOUT", default_value = "5s", value_parser = duration_parser)]
+    #[arg(long, value_name = "TIMEOUT", default_value = "10s", value_parser = duration_parser)]
     pub(crate) timeout: Duration,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct OptionalTimeoutArg {
     /// Override the default timeout duration that the command will wait for a response
-    #[arg(long, value_name = "TIMEOUT", default_value = "5s", value_parser = duration_parser)]
+    #[arg(long, value_name = "TIMEOUT", default_value = "10s", value_parser = duration_parser)]
     pub(crate) timeout: Option<Duration>,
 }

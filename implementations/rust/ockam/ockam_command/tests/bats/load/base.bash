@@ -67,10 +67,26 @@ teardown_home_dir() {
       echo "Failed test dir: $OCKAM_HOME" >&3
       cp -r "$OCKAM_HOME" "$HOME/.bats-tests"
     fi
-    run $OCKAM node delete --all --force --yes
+    run $OCKAM node delete --all --yes
   done
   export OCKAM_HOME=$OCKAM_HOME_BASE
-  run $OCKAM node delete --all --force --yes
+  run $OCKAM node delete --all --yes
+}
+
+force_kill_node() {
+  max_retries=5
+  i=0
+  pid="$($OCKAM node show $1 --output json | jq .pid)"
+  while [[ $i -lt $max_retries ]]; do
+    run kill -9 $pid
+    # Killing a background node (created without `-f`) leaves the
+    # process in a defunct state when running within Docker.
+    if ! ps -p $pid || ps -p $pid | grep defunct; then
+      return
+    fi
+    sleep 0.2
+    ((i = i + 1))
+  done
 }
 
 to_uppercase() {
@@ -120,11 +136,17 @@ run_failure() {
 
 bats_require_minimum_version 1.5.0
 
-# Disable the opentelemetry export to improve performances
-export OCKAM_OPENTELEMETRY_EXPORT=false
+# Disable the telemetry export to improve performances
+export OCKAM_TELEMETRY_EXPORT=false
+
+# Set a high timeout for CI tests
+export OCKAM_DEFAULT_TIMEOUT=5m
+
+# Set OCKAM_LOGGING to true so that command logs are persisted
+export OCKAM_LOGGING=true
 
 # Set QUIET to 1 to suppress user-facing logging written at stderr
-export QUIET=1
+export QUIET=true
 
 # Ockam binary to use
 if [[ -z $OCKAM ]]; then
@@ -144,8 +166,14 @@ fi
 mkdir -p "$OCKAM_HOME_BASE/.tmp"
 
 if [[ -z $BATS_LIB ]]; then
-  export BATS_LIB=$(brew --prefix)/lib # macos
-  # export BATS_LIB=$NVM_DIR/versions/node/v18.8.0/lib/node_modules # linux
+  # macos
+  if command -v brew 2>&1 >/dev/null; then
+    export BATS_LIB=$(brew --prefix)/lib
+  elif [[ -n $NVM_DIR ]]; then
+    export BATS_LIB=$NVM_DIR/versions/node/v18.8.0/lib/node_modules # linux
+  else
+    export BATS_LIB=/usr/local/lib/node_modules # linux
+  fi
 fi
 
 if [[ -z $PYTHON_SERVER_PORT ]]; then

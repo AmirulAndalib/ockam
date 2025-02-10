@@ -1,5 +1,4 @@
 use crate::portal::addresses::Addresses;
-use crate::portal::portal_message::MAX_PAYLOAD_SIZE;
 use crate::{PortalInternalMessage, PortalMessage, TcpRegistry};
 use ockam_core::compat::vec::Vec;
 use ockam_core::{
@@ -11,7 +10,7 @@ use opentelemetry::global;
 use opentelemetry::trace::Tracer;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
-use tracing::{error, instrument, warn};
+use tracing::{debug, error, instrument};
 
 /// A TCP Portal receiving message processor
 ///
@@ -25,6 +24,7 @@ pub(crate) struct TcpPortalRecvProcessor<R> {
     addresses: Addresses,
     onward_route: Route,
     payload_packet_counter: u16,
+    portal_payload_length: usize,
 }
 
 impl<R: AsyncRead + Unpin + Send + Sync + 'static> TcpPortalRecvProcessor<R> {
@@ -34,14 +34,16 @@ impl<R: AsyncRead + Unpin + Send + Sync + 'static> TcpPortalRecvProcessor<R> {
         read_half: R,
         addresses: Addresses,
         onward_route: Route,
+        portal_payload_length: usize,
     ) -> Self {
         Self {
             registry,
-            buf: Vec::with_capacity(MAX_PAYLOAD_SIZE),
+            buf: Vec::with_capacity(portal_payload_length),
             read_half,
             addresses,
             onward_route,
             payload_packet_counter: 0,
+            portal_payload_length,
         }
     }
 }
@@ -52,7 +54,8 @@ impl<R: AsyncRead + Unpin + Send + Sync + 'static> Processor for TcpPortalRecvPr
 
     #[instrument(skip_all, name = "TcpPortalRecvProcessor::initialize")]
     async fn initialize(&mut self, ctx: &mut Self::Context) -> Result<()> {
-        self.registry.add_portal_receiver_processor(&ctx.address());
+        self.registry
+            .add_portal_receiver_processor(ctx.primary_address());
 
         Ok(())
     }
@@ -60,7 +63,7 @@ impl<R: AsyncRead + Unpin + Send + Sync + 'static> Processor for TcpPortalRecvPr
     #[instrument(skip_all, name = "TcpPortalRecvProcessor::shutdown")]
     async fn shutdown(&mut self, ctx: &mut Self::Context) -> Result<()> {
         self.registry
-            .remove_portal_receiver_processor(&ctx.address());
+            .remove_portal_receiver_processor(ctx.primary_address());
 
         Ok(())
     }
@@ -93,27 +96,34 @@ impl<R: AsyncRead + Unpin + Send + Sync + 'static> Processor for TcpPortalRecvPr
                 )
                 .await
             {
-                warn!(
+                debug!(
                     "Error notifying Tcp Portal Sender about dropped connection {}",
                     err
                 );
             }
 
-            ctx.forward_from_address(
-                LocalMessage::new()
-                    .with_tracing_context(tracing_context.clone())
-                    .with_onward_route(self.onward_route.clone())
-                    .with_return_route(route![self.addresses.sender_remote.clone()])
-                    .with_payload(PortalMessage::Disconnect.encode()?),
-                self.addresses.receiver_remote.clone(),
-            )
-            .await?;
+            if let Err(err) = ctx
+                .forward_from_address(
+                    LocalMessage::new()
+                        .with_tracing_context(tracing_context.clone())
+                        .with_onward_route(self.onward_route.clone())
+                        .with_return_route(route![self.addresses.sender_remote.clone()])
+                        .with_payload(PortalMessage::Disconnect.encode()?),
+                    self.addresses.receiver_remote.clone(),
+                )
+                .await
+            {
+                debug!(
+                    "Error notifying the other side of the portal about dropped connection {}",
+                    err
+                );
+            }
 
             return Ok(false);
         }
 
         // Loop just in case buf was extended (should not happen though)
-        for chunk in self.buf.chunks(MAX_PAYLOAD_SIZE) {
+        for chunk in self.buf.chunks(self.portal_payload_length) {
             let msg = LocalMessage::new()
                 .with_tracing_context(tracing_context.clone())
                 .with_onward_route(self.onward_route.clone())

@@ -5,7 +5,6 @@ use serde::Serialize;
 use ockam::identity::Identifier;
 use ockam::Context;
 use ockam_api::authenticator::direct::Members;
-use ockam_multiaddr::MultiAddr;
 
 use super::authority_client;
 use crate::shared_args::IdentityOpts;
@@ -23,18 +22,18 @@ pub struct ListIdsCommand {
     #[command(flatten)]
     identity_opts: IdentityOpts,
 
-    /// The route to the Project to list members from
-    #[arg(long, short, value_name = "ROUTE_TO_PROJECT")]
-    to: Option<MultiAddr>,
+    /// The Project to list members from
+    #[arg(long, short, value_name = "PROJECT_NAME")]
+    project_name: Option<String>,
 }
 
 #[async_trait]
 impl Command for ListIdsCommand {
     const NAME: &'static str = "project-member list-ids";
 
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> Result<()> {
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> Result<()> {
         let (authority_node_client, _) =
-            authority_client(ctx, &opts, &self.identity_opts, &self.to).await?;
+            authority_client(ctx, &opts, &self.identity_opts, &self.project_name).await?;
 
         let member_ids = authority_node_client
             .list_member_ids(ctx)

@@ -4,8 +4,9 @@ use crate::{Context, RelayServiceOptions};
 use alloc::string::String;
 use ockam_core::compat::boxed::Box;
 use ockam_core::compat::sync::Arc;
-use ockam_core::{Address, DenyAll, Encodable, Mailbox, Mailboxes, Result, Routed, Worker};
-use ockam_identity::IdentitySecureChannelLocalInfo;
+use ockam_core::{
+    Address, DenyAll, Encodable, Mailbox, Mailboxes, Result, Routed, SecureChannelLocalInfo, Worker,
+};
 use ockam_node::WorkerBuilder;
 
 /// Alias worker to register remote workers under local names.
@@ -19,7 +20,7 @@ pub struct RelayService {
 
 impl RelayService {
     /// Start a forwarding service
-    pub async fn create(
+    pub fn create(
         ctx: &Context,
         address: impl Into<Address>,
         options: RelayServiceOptions,
@@ -32,6 +33,7 @@ impl RelayService {
             options.setup_flow_control_for_relay_service(ctx.flow_controls(), alias);
             additional_mailboxes.push(Mailbox::new(
                 alias.clone(),
+                None,
                 options.service_incoming_access_control.clone(),
                 Arc::new(DenyAll),
             ));
@@ -44,13 +46,13 @@ impl RelayService {
             .with_mailboxes(Mailboxes::new(
                 Mailbox::new(
                     address.clone(),
+                    None,
                     service_incoming_access_control,
                     Arc::new(DenyAll),
                 ),
                 additional_mailboxes,
             ))
-            .start(ctx)
-            .await?;
+            .start(ctx)?;
 
         info!("Relay service started at {address}");
 
@@ -69,9 +71,9 @@ impl Worker for RelayService {
         message: Routed<Self::Message>,
     ) -> Result<()> {
         let secure_channel_local_info =
-            IdentitySecureChannelLocalInfo::find_info(message.local_message()).ok();
+            SecureChannelLocalInfo::find_info(message.local_message()).ok();
 
-        let forward_route = message.return_route();
+        let forward_route = message.return_route().clone();
         let requested_relay_address = message.into_body()?;
 
         let requested_relay_name = if requested_relay_address == "register" {
@@ -90,7 +92,7 @@ impl Worker for RelayService {
                 let attributes = authority_validation
                     .identities_attributes
                     .get_attributes(
-                        &secure_channel_local_info.their_identity_id(),
+                        &secure_channel_local_info.their_identifier().into(),
                         &authority_validation.authority,
                     )
                     .await?;
@@ -131,6 +133,10 @@ impl Worker for RelayService {
         let payload = final_relay_name.clone().encode()?;
         let final_relay_address = Address::from_string(final_relay_name);
 
+        if ctx.stop_address(&final_relay_address).is_ok() {
+            info!("Removed existing alias on {}", final_relay_address);
+        }
+
         self.options
             .setup_flow_control_for_relay(ctx.flow_controls(), &final_relay_address);
 
@@ -140,8 +146,7 @@ impl Worker for RelayService {
             forward_route,
             payload.to_vec(),
             self.options.relays_incoming_access_control.clone(),
-        )
-        .await?;
+        )?;
 
         Ok(())
     }

@@ -16,7 +16,7 @@ use crate::api::{state, to_c_string};
 use crate::cli::check_ockam_executable;
 use crate::state::AppState;
 use ockam_api::cli_state::CliState;
-use ockam_api::cloud::email_address::EmailAddress;
+use ockam_api::orchestrator::email_address::EmailAddress;
 use ockam_core::Address;
 use std::ffi::c_char;
 use std::pin::Pin;
@@ -35,6 +35,7 @@ const ERROR_NOT_INITIALIZED: &str =
 /// Returns true if successful, false otherwise.
 /// In case of failure the application should propose a reset to the user.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn initialize_application(
     // we can't use any type alias because cbindgen doesn't support them
     application_state_callback: unsafe extern "C" fn(
@@ -105,6 +106,7 @@ extern "C" fn initialize_application(
 
 /// Accept the invitation with the provided id.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn accept_invitation(id: *const c_char) {
     let id = unsafe { std::ffi::CStr::from_ptr(id).to_str().unwrap().to_string() };
     let app_state = unsafe { APPLICATION_STATE.as_ref() }.expect(ERROR_NOT_INITIALIZED);
@@ -118,6 +120,7 @@ extern "C" fn accept_invitation(id: *const c_char) {
 
 /// Ignore the invitation with the provided id.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn ignore_invitation(id: *const c_char) {
     let id = unsafe { std::ffi::CStr::from_ptr(id).to_str().unwrap().to_string() };
     let app_state = unsafe { APPLICATION_STATE.as_ref() }.expect(ERROR_NOT_INITIALIZED);
@@ -131,6 +134,7 @@ extern "C" fn ignore_invitation(id: *const c_char) {
 
 /// Initiate graceful shutdown of the application, exit process when complete.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn shutdown_application() {
     let app_state = unsafe { APPLICATION_STATE.as_ref() };
     if let Some(app_state) = app_state {
@@ -143,6 +147,7 @@ extern "C" fn shutdown_application() {
 /// Share a local service with the provided emails.
 /// Emails are separated by ';'.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn share_local_service(name: *const c_char, emails: *const c_char) -> *const c_char {
     let worker_addr = unsafe { std::ffi::CStr::from_ptr(name).to_str().unwrap().to_string() };
     let worker_addr: Address = worker_addr.into();
@@ -164,7 +169,11 @@ extern "C" fn share_local_service(name: *const c_char, emails: *const c_char) ->
             match EmailAddress::parse(&email) {
                 Ok(email_address) => {
                     result = app_state
-                        .create_service_invitation_by_alias(email_address, &worker_addr)
+                        .create_service_invitation_by_alias(
+                            &app_state.context(),
+                            email_address,
+                            &worker_addr,
+                        )
                         .await;
                 }
                 Err(e) => {
@@ -188,6 +197,7 @@ extern "C" fn share_local_service(name: *const c_char, emails: *const c_char) ->
 
 /// Enable an accepted service associated with the invite id.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn enable_accepted_service(invitation_id: *const c_char) {
     let invitation_id = unsafe {
         std::ffi::CStr::from_ptr(invitation_id)
@@ -206,6 +216,7 @@ extern "C" fn enable_accepted_service(invitation_id: *const c_char) {
 
 /// Disable an accepted service associated with the invite id.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn disable_accepted_service(invitation_id: *const c_char) {
     let invitation_id = unsafe {
         std::ffi::CStr::from_ptr(invitation_id)
@@ -224,6 +235,7 @@ extern "C" fn disable_accepted_service(invitation_id: *const c_char) {
 
 /// Removes a local service with the provided name.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn delete_local_service(worker_addr: *const c_char) {
     let worker_addr = unsafe {
         std::ffi::CStr::from_ptr(worker_addr)
@@ -243,6 +255,7 @@ extern "C" fn delete_local_service(worker_addr: *const c_char) {
 /// Creates a local service with the provided name and address.
 /// Returns null if successful, otherwise returns an error message.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn create_local_service(
     worker_addr: *const c_char,
     address: *const c_char,
@@ -276,6 +289,7 @@ extern "C" fn create_local_service(
 /// Synchronously resets the application state to a fresh installation.
 /// A restart is **required** afterward.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn reset_application_state() {
     let app_state = unsafe { APPLICATION_STATE.as_ref() };
     match app_state {
@@ -288,16 +302,21 @@ extern "C" fn reset_application_state() {
             });
         }
         None => {
-            // allow disk state reset even if we don't have an application state
-            CliState::backup_and_reset().expect(
+            let app_state = unsafe { APPLICATION_STATE.as_ref() }.expect(ERROR_NOT_INITIALIZED);
+
+            app_state.context().runtime().block_on(async {
+                // allow disk state reset even if we don't have an application state
+                CliState::backup_and_reset().await.expect(
                 "Failed to initialize CliState. Try to manually remove the '~/.ockam' directory",
             );
+            })
         }
     }
 }
 
 /// Starts user enrollment
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn enroll_user() {
     let app_state = unsafe { APPLICATION_STATE.as_ref() }.expect(ERROR_NOT_INITIALIZED);
 
@@ -309,6 +328,7 @@ extern "C" fn enroll_user() {
 
 /// This function retrieve the current version of the application state, for polling purposes.
 #[no_mangle]
+#[allow(static_mut_refs)]
 extern "C" fn application_state_snapshot() -> super::state::c::ApplicationState {
     let app_state = unsafe { APPLICATION_STATE.as_ref() }.expect(ERROR_NOT_INITIALIZED);
 

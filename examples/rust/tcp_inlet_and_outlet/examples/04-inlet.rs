@@ -6,7 +6,7 @@ use ockam::{node, route, Context, Result, Route};
 async fn main(ctx: Context) -> Result<()> {
     // Initialize the TCP Transport.
     let node = node(ctx).await?;
-    let tcp = node.create_tcp_transport().await?;
+    let tcp = node.create_tcp_transport()?;
 
     // Create a Vault to store our cryptographic keys and an Identity to represent this Node.
     // Then initiate a handshake with the secure channel listener on the node that has the
@@ -19,10 +19,10 @@ async fn main(ctx: Context) -> Result<()> {
 
     // Expect second command line argument to be the Outlet node forwarder address
     let forwarding_address = std::env::args().nth(2).expect("no outlet forwarding address given");
-    let node_in_hub = tcp
+    let node_in_orchestrator = tcp
         .connect("1.node.ockam.network:4000", TcpConnectionOptions::new())
         .await?;
-    let r = route![node_in_hub, forwarding_address, "secure_channel_listener"];
+    let r = route![node_in_orchestrator, forwarding_address, "secure_channel_listener"];
     let channel = node.create_secure_channel(&e, r, SecureChannelOptions::new()).await?;
 
     // We know Secure Channel address that tunnels messages to the node with an Outlet,
@@ -47,7 +47,7 @@ async fn main(ctx: Context) -> Result<()> {
     tcp.create_inlet(inlet_address, route_to_outlet, TcpInletOptions::new())
         .await?;
 
-    // We won't call ctx.stop() here,
+    // We won't call ctx.shutdown_node() here,
     // so this program will keep running until you interrupt it with Ctrl-C.
     Ok(())
 }

@@ -1,3 +1,6 @@
+#![allow(clippy::unconditional_recursion)]
+use std::fmt::Display;
+
 use crate::cli_state::CliStateError;
 use crate::config::lookup::InternetAddress;
 use crate::nodes::models::transport::{TransportMode, TransportType};
@@ -19,9 +22,9 @@ impl CreateTransportJson {
         Ok(Self {
             tt,
             tm,
-            addr: InternetAddress::new(addr).ok_or(CliStateError::InvalidOperation(
-                "Invalid address '{addr}'".to_string(),
-            ))?,
+            addr: InternetAddress::new(addr).ok_or_else(|| {
+                CliStateError::InvalidOperation("Invalid address '{addr}'".to_string())
+            })?,
         })
     }
 
@@ -38,8 +41,8 @@ impl CreateTransportJson {
     }
 }
 
-impl ToString for CreateTransportJson {
-    fn to_string(&self) -> String {
-        format!("{}/{}/{}", self.tt, self.tm, self.addr)
+impl Display for CreateTransportJson {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}/{}", self.tt, self.tm, self.addr)
     }
 }

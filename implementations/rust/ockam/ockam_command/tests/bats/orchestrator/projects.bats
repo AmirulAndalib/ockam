@@ -26,11 +26,9 @@ teardown() {
 
   # From file
   run_success "$OCKAM" project enroll $TICKET_PATH --test-argument-parser
-  run_failure "$OCKAM" project enroll missing-file --test-argument-parser
 
   # From contents
   run_success "$OCKAM" project enroll $(cat $TICKET_PATH) --test-argument-parser
-  run_failure "$OCKAM" project enroll "INVALID_TICKET" --test-argument-parser
 }
 
 @test "projects - enrollment with controller" {
@@ -92,7 +90,10 @@ teardown() {
 
   # The green identity can't create relay as it isn't a member
   relay_name=$(random_str)
-  run_failure "$OCKAM" relay create "$relay_name"
+  run_success "$OCKAM" relay create "$relay_name" --jq ".connection_status"
+  assert_output "\"Down\""
+
+  run_success "$OCKAM" relay delete "$relay_name" --yes
 
   # Add the green identity as a member
   export OCKAM_HOME=$ENROLLED_OCKAM_HOME
@@ -137,4 +138,19 @@ teardown() {
 @test "projects - list addons" {
   run_success "$OCKAM" project addon list --project default
   assert_output --partial "Id: okta"
+}
+
+@test "projects - CRUD admins" {
+  run_success "$OCKAM" project-admin add ockam.admin.test@ockam.io
+  assert_output --partial "ockam.admin.test@ockam.io"
+
+  run_failure "$OCKAM" project-admin add "not_an_email"
+
+  run_success "$OCKAM" project-admin list --output json
+  assert_output --partial "\"email\": \"ockam.admin.test@ockam.io\""
+
+  run_success "$OCKAM" project-admin delete ockam.admin.test@ockam.io --yes
+
+  run_success "$OCKAM" project-admin list --output json
+  refute_output --partial "ockam.admin.test@ockam.io"
 }

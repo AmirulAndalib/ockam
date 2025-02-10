@@ -5,7 +5,7 @@ use crate::nodes::{InMemoryNode, NODEMANAGER_ADDR};
 use crate::DefaultAddress;
 use minicbor::Decoder;
 use ockam_core::api::{RequestHeader, Response};
-use ockam_core::{Address, Routed, Worker};
+use ockam_core::{Address, Result, Routed, Worker};
 use ockam_node::Context;
 use std::error::Error;
 use std::sync::Arc;
@@ -20,9 +20,10 @@ impl NodeManagerWorker {
         NodeManagerWorker { node_manager }
     }
 
-    pub async fn stop(&self, ctx: &Context) -> ockam_core::Result<()> {
+    // TODO: This is never called.
+    pub async fn stop(&self, ctx: &Context) -> Result<()> {
         self.node_manager.stop(ctx).await?;
-        ctx.stop_worker(NODEMANAGER_ADDR).await?;
+        ctx.stop_address(&NODEMANAGER_ADDR.into())?;
         Ok(())
     }
 }
@@ -36,7 +37,7 @@ impl NodeManagerWorker {
         ctx: &mut Context,
         req: &RequestHeader,
         dec: &mut Decoder<'_>,
-    ) -> ockam_core::Result<Vec<u8>> {
+    ) -> Result<Vec<u8>> {
         debug! {
             target: TARGET,
             id     = %req.id(),
@@ -68,7 +69,7 @@ impl NodeManagerWorker {
                 encode_response(req, self.create_tcp_connection(ctx, dec.decode()?).await)?
             }
             (Delete, ["node", "tcp", "connection"]) => {
-                encode_response(req, self.delete_tcp_connection(dec.decode()?).await)?
+                encode_response(req, self.delete_tcp_connection(dec.decode()?))?
             }
 
             // ==*== Tcp Listeners ==*==
@@ -80,48 +81,44 @@ impl NodeManagerWorker {
                 encode_response(req, self.create_tcp_listener(dec.decode()?).await)?
             }
             (Delete, ["node", "tcp", "listener"]) => {
-                encode_response(req, self.delete_tcp_listener(dec.decode()?).await)?
+                encode_response(req, self.delete_tcp_listener(dec.decode()?))?
             }
 
             // ==*== Secure channels ==*==
-            (Get, ["node", "secure_channel"]) => {
-                encode_response(req, self.list_secure_channels().await)?
-            }
+            (Get, ["node", "secure_channel"]) => encode_response(req, self.list_secure_channels())?,
             (Get, ["node", "secure_channel_listener"]) => {
-                encode_response(req, self.list_secure_channel_listener().await)?
+                encode_response(req, self.list_secure_channel_listener())?
             }
             (Post, ["node", "secure_channel"]) => {
                 encode_response(req, self.create_secure_channel(dec.decode()?, ctx).await)?
             }
             (Delete, ["node", "secure_channel"]) => {
-                encode_response(req, self.delete_secure_channel(dec.decode()?, ctx).await)?
+                encode_response(req, self.delete_secure_channel(dec.decode()?, ctx))?
             }
             (Get, ["node", "show_secure_channel"]) => {
-                encode_response(req, self.show_secure_channel(dec.decode()?).await)?
+                encode_response(req, self.show_secure_channel(dec.decode()?))?
             }
             (Post, ["node", "secure_channel_listener"]) => encode_response(
                 req,
                 self.create_secure_channel_listener(dec.decode()?, ctx)
                     .await,
             )?,
-            (Delete, ["node", "secure_channel_listener"]) => encode_response(
-                req,
-                self.delete_secure_channel_listener(dec.decode()?, ctx)
-                    .await,
-            )?,
+            (Delete, ["node", "secure_channel_listener"]) => {
+                encode_response(req, self.delete_secure_channel_listener(dec.decode()?, ctx))?
+            }
             (Get, ["node", "show_secure_channel_listener"]) => {
-                encode_response(req, self.show_secure_channel_listener(dec.decode()?).await)?
+                encode_response(req, self.show_secure_channel_listener(dec.decode()?))?
             }
 
             // ==*== Services ==*==
             (Post, ["node", "services", DefaultAddress::UPPERCASE_SERVICE]) => {
-                encode_response(req, self.start_uppercase_service(ctx, dec.decode()?).await)?
+                encode_response(req, self.start_uppercase_service(ctx, dec.decode()?))?
             }
             (Post, ["node", "services", DefaultAddress::ECHO_SERVICE]) => {
                 encode_response(req, self.start_echoer_service(ctx, dec.decode()?).await)?
             }
             (Post, ["node", "services", DefaultAddress::HOP_SERVICE]) => {
-                encode_response(req, self.start_hop_service(ctx, dec.decode()?).await)?
+                encode_response(req, self.start_hop_service(ctx, dec.decode()?))?
             }
             (Post, ["node", "services", DefaultAddress::KAFKA_OUTLET]) => encode_response(
                 req,
@@ -141,9 +138,18 @@ impl NodeManagerWorker {
                 self.delete_kafka_service(ctx, dec.decode()?, KafkaServiceKind::Inlet)
                     .await,
             )?,
-            (Get, ["node", "services"]) => encode_response(req, self.list_services().await)?,
+            (Post, ["node", "services", DefaultAddress::LEASE_MANAGER]) => encode_response(
+                req,
+                self.start_influxdb_lease_issuer_service(ctx, dec.decode()?)
+                    .await,
+            )?,
+            (Delete, ["node", "services", DefaultAddress::LEASE_MANAGER]) => encode_response(
+                req,
+                self.delete_influxdb_lease_issuer_service(ctx, dec.decode()?),
+            )?,
+            (Get, ["node", "services"]) => encode_response(req, self.list_services())?,
             (Get, ["node", "services", service_type]) => {
-                encode_response(req, self.list_services_of_type(service_type).await)?
+                encode_response(req, self.list_services_of_type(service_type))?
             }
 
             // ==*== Relay commands ==*==
@@ -161,10 +167,10 @@ impl NodeManagerWorker {
             // ==*== Inlets & Outlets ==*==
             (Get, ["node", "inlet"]) => encode_response(req, self.get_inlets().await)?,
             (Get, ["node", "inlet", alias]) => encode_response(req, self.show_inlet(alias).await)?,
-            (Get, ["node", "outlet"]) => self.get_outlets(req).await.to_vec()?,
+            (Get, ["node", "outlet"]) => self.get_outlets(req).to_vec()?,
             (Get, ["node", "outlet", addr]) => {
                 let addr: Address = addr.to_string().into();
-                encode_response(req, self.show_outlet(&addr).await)?
+                encode_response(req, self.show_outlet(&addr))?
             }
             (Post, ["node", "inlet"]) => {
                 encode_response(req, self.create_inlet(ctx, dec.decode()?).await)?
@@ -180,6 +186,16 @@ impl NodeManagerWorker {
                 encode_response(req, self.delete_inlet(alias).await)?
             }
             (Delete, ["node", "portal"]) => todo!(),
+
+            // ==*== InfluxDB Inlets & Outlets  ==*==
+            (Post, ["node", "influxdb_inlet"]) => encode_response(
+                req,
+                self.start_influxdb_inlet_service(ctx, dec.decode()?).await,
+            )?,
+            (Post, ["node", "influxdb_outlet"]) => encode_response(
+                req,
+                self.start_influxdb_outlet_service(ctx, dec.decode()?).await,
+            )?,
 
             // ==*== Flow Controls ==*==
             (Post, ["node", "flow_controls", "add_consumer"]) => {
@@ -227,18 +243,13 @@ impl Worker for NodeManagerWorker {
     type Message = Vec<u8>;
     type Context = Context;
 
-    async fn shutdown(&mut self, ctx: &mut Self::Context) -> ockam_core::Result<()> {
+    async fn shutdown(&mut self, _ctx: &mut Self::Context) -> Result<()> {
         debug!(target: TARGET, "Shutting down NodeManagerWorker");
-        self.node_manager.medic_handle.stop_medic(ctx).await?;
         Ok(())
     }
 
-    async fn handle_message(
-        &mut self,
-        ctx: &mut Context,
-        msg: Routed<Vec<u8>>,
-    ) -> ockam_core::Result<()> {
-        let return_route = msg.return_route();
+    async fn handle_message(&mut self, ctx: &mut Context, msg: Routed<Vec<u8>>) -> Result<()> {
+        let return_route = msg.return_route().clone();
         let body = msg.into_body()?;
         let mut dec = Decoder::new(&body);
         let req: RequestHeader = match dec.decode() {

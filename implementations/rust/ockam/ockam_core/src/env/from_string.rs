@@ -1,6 +1,7 @@
 use crate::env::error;
 use crate::errcode::{Kind, Origin};
 use crate::{Error, Result};
+use core::str::FromStr;
 use once_cell::sync::OnceCell;
 use regex::Regex;
 use std::path::PathBuf;
@@ -43,6 +44,12 @@ impl FromString for char {
         }
 
         Ok(s.chars().next().unwrap())
+    }
+}
+
+impl FromString for usize {
+    fn from_string(s: &str) -> Result<Self> {
+        usize::from_str(s).map_err(|err| error(format!("usize parsing error: {err}")))
     }
 }
 
@@ -117,11 +124,7 @@ pub fn parse_duration(arg: &str) -> Result<Duration> {
             Regex::new(r"(?P<numeric_duration>[0-9]+)(?P<length_sigil>d|h|m|s|ms)?$").unwrap()
         })
         .captures(arg)
-        .ok_or(Error::new(
-            Origin::Api,
-            Kind::Serialization,
-            "Invalid duration.",
-        ))?;
+        .ok_or_else(|| Error::new(Origin::Api, Kind::Serialization, "Invalid duration."))?;
     let time = needles["numeric_duration"]
         .parse::<u64>()
         .map_err(|_| Error::new(Origin::Api, Kind::Serialization, "Invalid duration."))?;

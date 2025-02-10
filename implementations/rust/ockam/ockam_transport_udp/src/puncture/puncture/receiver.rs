@@ -1,4 +1,5 @@
 use crate::puncture::puncture::message::PunctureMessage;
+use crate::puncture::puncture::notification::UdpPunctureNotification;
 use crate::puncture::puncture::sender::UdpPunctureSenderWorker;
 use crate::puncture::puncture::{Addresses, UdpPunctureOptions};
 use crate::{PunctureError, UdpBind, UDP};
@@ -11,7 +12,7 @@ use ockam_node::{Context, DelayedEvent, WorkerBuilder};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Sender;
 use tracing::log::warn;
-use tracing::{debug, info, trace};
+use tracing::{info, trace};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(1);
 const PUNCTURE_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -26,6 +27,8 @@ const PUNCTURE_OPEN_TIMEOUT: Duration = Duration::from_secs(10);
 /// routing tables (heartbeat). Also, responsible for sending payload from the remote
 /// to addresses inside our node.
 pub(crate) struct UdpPunctureReceiverWorker {
+    /// UDP Bind (Owned, we're responsible for unbinding it eventually)
+    bind: UdpBind,
     /// All Addresses used in this puncture
     addresses: Addresses,
     /// For generating internal heartbeat messages
@@ -33,9 +36,9 @@ pub(crate) struct UdpPunctureReceiverWorker {
     /// Is puncture open?
     puncture_open: bool,
     /// Notify that puncture is open those who wait for it
-    notify_puncture_open_sender: Sender<Route>,
-    /// Route to peer node's [`UdpPunctureReceiverWorker`]
-    peer_route: Route,
+    notify_puncture_open_sender: Sender<UdpPunctureNotification>,
+    /// Peer's UDP address
+    peer_udp_address: String,
     /// Timestamp of most recent message received from peer
     peer_received_at: Instant,
     /// If we have received the first ping
@@ -51,25 +54,21 @@ pub(crate) struct UdpPunctureReceiverWorker {
 
 impl UdpPunctureReceiverWorker {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn create(
+    pub(crate) fn create(
         ctx: &Context,
-        bind: &UdpBind,
+        bind: UdpBind,
         peer_udp_address: String,
         recipient_address: Address,
         addresses: Addresses,
-        notify_puncture_open_sender: Sender<Route>,
+        notify_puncture_open_sender: Sender<UdpPunctureNotification>,
         options: UdpPunctureOptions,
         redirect_first_message_to_transport: bool,
     ) -> Result<()> {
-        let peer_udp_address = Address::new(UDP, peer_udp_address);
-
-        let peer_route = route![bind.sender_address().clone(), peer_udp_address];
-
-        let heartbeat =
-            DelayedEvent::create(ctx, addresses.heartbeat_address().clone(), ()).await?;
+        let heartbeat = DelayedEvent::create(ctx, addresses.heartbeat_address().clone(), ())?;
 
         let remote_mailbox = Mailbox::new(
             addresses.remote_address().clone(),
+            None,
             Arc::new(AllowAll),
             Arc::new(AllowAll),
         );
@@ -78,13 +77,15 @@ impl UdpPunctureReceiverWorker {
 
         let receiver_mailbox = Mailbox::new(
             addresses.receiver_address().clone(),
+            None,
             Arc::new(DenyAll),
             options.create_receiver_outgoing_access_control(ctx.flow_controls()),
         );
 
         let heartbeat_mailbox = Mailbox::new(
             addresses.heartbeat_address().clone(),
-            Arc::new(AllowSourceAddress(heartbeat.address())),
+            None,
+            Arc::new(AllowSourceAddress(heartbeat.address().clone())),
             Arc::new(DenyAll),
         );
 
@@ -94,29 +95,28 @@ impl UdpPunctureReceiverWorker {
             .with_address(addresses.sender_address().clone())
             .with_incoming_access_control(AllowAll)
             .with_outgoing_access_control(AllowAll)
-            .start(ctx)
-            .await?;
+            .start(ctx)?;
 
         // Create and start worker
-        let worker = Self {
+        let receiver_worker = Self {
+            bind,
             addresses: addresses.clone(),
             heartbeat,
             puncture_open: false,
             notify_puncture_open_sender,
-            peer_route,
+            peer_udp_address,
             peer_received_at: Instant::now(),
             first_ping_received: false,
             recipient_address,
             redirect_first_message_to_transport,
         };
 
-        WorkerBuilder::new(worker)
+        WorkerBuilder::new(receiver_worker)
             .with_mailboxes(Mailboxes::new(
                 remote_mailbox,
                 vec![receiver_mailbox, heartbeat_mailbox],
             ))
-            .start(ctx)
-            .await?;
+            .start(ctx)?;
 
         Ok(())
     }
@@ -126,14 +126,17 @@ impl UdpPunctureReceiverWorker {
         if !self.puncture_open {
             self.puncture_open = true;
 
-            info!("Puncture succeeded. Route={}", self.peer_route);
+            info!("Puncture succeeded. Peer address={}", self.peer_udp_address);
         }
 
         // Even if puncture was already open - let's notify everyone that it's still open
-        let _ = self.notify_puncture_open_sender.send(route![
-            self.peer_route.clone(),
-            self.recipient_address.clone()
-        ]);
+        let _ = self
+            .notify_puncture_open_sender
+            .send(UdpPunctureNotification::Open(route![
+                self.bind.sender_address().clone(),
+                Address::new_with_string(UDP, self.peer_udp_address.clone()),
+                self.recipient_address.clone()
+            ]));
 
         Ok(())
     }
@@ -142,10 +145,10 @@ impl UdpPunctureReceiverWorker {
     async fn handle_peer(
         &mut self,
         ctx: &mut Context,
-        msg: Routed<Any>,
+        payload: Vec<u8>,
         return_route: &Route,
     ) -> Result<()> {
-        let msg = PunctureMessage::decode(msg.payload())?;
+        let msg = PunctureMessage::decode(&payload)?;
         trace!("Puncture remote message: {:?}", msg);
 
         // Record contact with peer, but only for pong and payload message.
@@ -156,7 +159,7 @@ impl UdpPunctureReceiverWorker {
         match msg {
             PunctureMessage::Ping => {
                 self.first_ping_received = true;
-                debug!("Received Ping from peer. Will Pong.");
+                trace!("Received Ping from peer. Will Pong.");
                 ctx.send_from_address(
                     return_route.clone(),
                     PunctureMessage::Pong,
@@ -165,21 +168,18 @@ impl UdpPunctureReceiverWorker {
                 .await?;
             }
             PunctureMessage::Pong => {
-                debug!("Received Pong from peer. Setting as puncture is open");
+                trace!("Received Pong from peer. Setting as puncture is open");
                 self.peer_received_at = now;
                 self.set_puncture_open().await?;
             }
             PunctureMessage::Payload {
                 onward_route,
-                mut return_route,
+                return_route,
                 payload,
             } => {
                 trace!("Received Payload from peer. Will forward to local entity");
 
-                let return_route = return_route
-                    .modify()
-                    .prepend(self.addresses.sender_address().clone())
-                    .into();
+                let return_route = self.addresses.sender_address().clone() + return_route;
 
                 // Update routing & payload
                 let local_message = LocalMessage::new()
@@ -198,20 +198,22 @@ impl UdpPunctureReceiverWorker {
 
     /// Handle heartbeat messages
     async fn handle_heartbeat_impl(&mut self, ctx: &mut Context) -> Result<()> {
-        debug!(
-            "Puncture Heartbeat: puncture_open = {:?}, peer_route = {:?}",
-            self.puncture_open, self.peer_route
+        trace!(
+            "Puncture Heartbeat: puncture_open = {:?}, Peer UDP Address = {:?}",
+            self.puncture_open,
+            self.peer_udp_address
         );
 
         // If we have not heard from peer for a while, consider puncture as closed
         if self.puncture_open && self.peer_received_at.elapsed() >= PUNCTURE_OPEN_TIMEOUT {
             warn!("Haven't received pongs from the peer for more than {:?}. Shutting down the puncture.", PUNCTURE_OPEN_TIMEOUT);
 
-            _ = self.notify_puncture_open_sender.send(route![]);
+            _ = self
+                .notify_puncture_open_sender
+                .send(UdpPunctureNotification::Closed);
 
             // Shut down itself
-            ctx.stop_worker(self.addresses.remote_address().clone())
-                .await?;
+            ctx.stop_address(self.addresses.remote_address())?;
 
             return Ok(());
         }
@@ -223,9 +225,16 @@ impl UdpPunctureReceiverWorker {
         // on the other side, until we receive the first ping, which guarantees
         // that `UdpPunctureReceiverWorker` was started on the other side
         let route = if !self.first_ping_received && self.redirect_first_message_to_transport {
-            self.peer_route.clone()
+            route![
+                self.bind.sender_address().clone(),
+                Address::new_with_string(UDP, self.peer_udp_address.clone())
+            ]
         } else {
-            route![self.peer_route.clone(), self.recipient_address.clone()]
+            route![
+                self.bind.sender_address().clone(),
+                Address::new_with_string(UDP, self.peer_udp_address.clone()),
+                self.recipient_address.clone()
+            ]
         };
 
         ctx.send_from_address(
@@ -243,7 +252,7 @@ impl UdpPunctureReceiverWorker {
         let res = self.handle_heartbeat_impl(ctx).await;
 
         // Schedule next heartbeat here in case something errors
-        self.heartbeat.schedule(HEARTBEAT_INTERVAL).await?;
+        self.heartbeat.schedule(HEARTBEAT_INTERVAL)?;
 
         res
     }
@@ -255,17 +264,15 @@ impl Worker for UdpPunctureReceiverWorker {
     type Context = Context;
 
     async fn initialize(&mut self, _context: &mut Self::Context) -> Result<()> {
-        self.heartbeat.schedule(Duration::ZERO).await?;
-
-        Ok(())
+        self.heartbeat.schedule(Duration::ZERO)
     }
 
     async fn shutdown(&mut self, ctx: &mut Self::Context) -> Result<()> {
         self.heartbeat.cancel();
 
-        _ = ctx
-            .stop_worker(self.addresses.sender_address().clone())
-            .await;
+        _ = ctx.stop_address(self.addresses.sender_address());
+
+        _ = ctx.stop_address(self.bind.sender_address());
 
         Ok(())
     }
@@ -276,11 +283,11 @@ impl Worker for UdpPunctureReceiverWorker {
         msg: Routed<Self::Message>,
     ) -> Result<()> {
         let addr = msg.msg_addr();
-        if &addr == self.addresses.remote_address() {
-            let return_route = msg.return_route();
-
-            self.handle_peer(ctx, msg, &return_route).await?;
-        } else if &addr == self.addresses.heartbeat_address() {
+        if addr == self.addresses.remote_address() {
+            let msg = msg.into_local_message();
+            let return_route = msg.return_route;
+            self.handle_peer(ctx, msg.payload, &return_route).await?;
+        } else if addr == self.addresses.heartbeat_address() {
             self.handle_heartbeat(ctx).await?;
         } else {
             return Err(PunctureError::Internal)?;

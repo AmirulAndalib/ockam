@@ -6,10 +6,27 @@ use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use ockam_core::compat::{string::String, vec::Vec};
 #[cfg(feature = "std")]
 use ockam_core::env::FromString;
-use ockam_core::{Error, Result};
+use ockam_core::{Error, LocalInfoIdentifier, Result};
 
 use crate::models::{ChangeHash, CHANGE_HASH_LEN, IDENTIFIER_LEN};
 use crate::{Identifier, IdentityError};
+
+use ockam_core::LOCAL_INFO_IDENTIFIER_LEN;
+use static_assertions::const_assert_eq;
+
+const_assert_eq!(LOCAL_INFO_IDENTIFIER_LEN, IDENTIFIER_LEN);
+
+impl From<LocalInfoIdentifier> for Identifier {
+    fn from(value: LocalInfoIdentifier) -> Self {
+        Self(value.0)
+    }
+}
+
+impl From<Identifier> for LocalInfoIdentifier {
+    fn from(value: Identifier) -> Self {
+        Self(value.0)
+    }
+}
 
 impl Serialize for Identifier {
     fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
@@ -227,7 +244,7 @@ mod test {
         }
 
         fn check_encode_decode(id: Identifier) -> bool {
-            id == minicbor::decode(&minicbor::to_vec(&id).unwrap()).unwrap()
+            id == minicbor::decode(&ockam_core::cbor_encode_preallocate(&id).unwrap()).unwrap()
         }
 
         fn check_serialize_deserialize(id: Identifier) -> bool {

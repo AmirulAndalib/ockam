@@ -4,6 +4,155 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.137.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Update the postgres schema
+- Don't run postgres migrations automatically on startup
+- Make sure that reset can not remove postgres data
+- Isolate member data by authority
+- Updated dependencies
+
+### Fixed
+
+- Fix the migration of in-memory sqlite dbs
+
+## 0.136.0 - 2025-01-09
+
+### Added
+
+- Simplify `node create` execution
+- Improve logs for tcp portals creation
+- Session replacer sends notifications on session lost/replaced
+- Simplify the retrieval of the postgres connection url
+- Improvements to portals commands arguments
+- Updated dependencies
+
+### Changed
+
+- Extract `OCKAM_SQLITE_IN_MEMORY` env var usage up to the cli state initialization
+
+## 0.135.0 - 2024-12-12
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Make the auto-retry an implementation detail of repositories
+
+## 0.134.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.133.0 - 2024-11-27
+
+### Added
+
+- Remove last usages of `OCKAM_LOG` env var
+- Updated dependencies
+
+## 0.132.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.131.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.130.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.129.0 - 2024-10-23
+
+### Added
+
+- Added optional watchdog for tokio blocking tasks
+- Switching to sqlite wal mode for better concurrency
+- Updated dependencies
+
+## 0.128.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.127.0 - 2024-10-15
+
+### Added
+
+- Updated dependencies
+
+## 0.126.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.125.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.124.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.123.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.122.0 - 2024-07-29
+
+### Added
+
+- Converted socket addresses to hostnames in command
+- Adjust timeouts
+- Report more detailed errors
+- Stop a previous medic before starting a new one
+- Updated dependencies
+
+### Fixed
+
+- Allow the creation of a sqlite database with a relative path
+
+## 0.121.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Use a published dependency for the patched sqlx library
+
+## 0.120.0 - 2024-07-01
+
+### Added
+
+- Use the any driver for sqlx to add support for postgres
+- Change tcp protocol serialization
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
 ## 0.119.0 - 2024-06-25
 
 ### Added

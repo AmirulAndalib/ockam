@@ -67,7 +67,7 @@ jobs:
         shell: nix develop ./tools/nix#rust --keep CI --ignore-environment --command bash {0}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ github.event.inputs.commit_sha }}
 
@@ -111,7 +111,7 @@ jobs:
         shell: nix develop ./tools/nix#rust${{matrix.build_projects == 'nightly' && '_nightly' || '' }} --keep CI --ignore-environment --command bash {0}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ github.event.inputs.commit_sha }}
 
@@ -152,7 +152,7 @@ jobs:
         - stable
         - nightly
     steps:
-    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ github.event.inputs.commit_sha }}
 
@@ -196,7 +196,7 @@ jobs:
         test_projects:
         - stable
     steps:
-    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ github.event.inputs.commit_sha }}
 
@@ -213,11 +213,7 @@ jobs:
     - name: Run postgres test on ${{ matrix.test_projects }}
       run: |
         pg_ctl -D /var/lib/postgresql/data -l logfile start
-        export OCKAM_POSTGRES_HOST=localhost
-        export OCKAM_POSTGRES_PORT=5432
-        export OCKAM_POSTGRES_DATABASE_NAME=test
-        export OCKAM_POSTGRES_USER=postgres
-        export OCKAM_POSTGRES_PASSWORD=password
+        export OCKAM_DATABASE_CONNECTION_URL=postgres://postgres:password@localhost:5432/test
         make -f implementations/rust/Makefile test_postgres
 
     - name: Nix Upload Store
@@ -242,7 +238,7 @@ jobs:
       run:
         shell: nix develop ./tools/nix#${{matrix.nix_toolchain }} --keep CI --ignore-environment --command bash {0}
     steps:
-    - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ github.event.inputs.commit_sha }}
 
@@ -279,13 +275,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout ockam cli repository
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ inputs.ockam_command_cli_version != '' && inputs.ockam_command_cli_version || inputs.commit_sha  }}
         path: ockam_cli
 
     - name: Checkout ockam bats repository
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ inputs.commit_sha }}
         path: ockam_bats
@@ -317,13 +313,45 @@ jobs:
       working-directory: ockam_bats
       shell: nix develop ./tools/nix#tooling --command bash {0}
       run: |
+        set -ex
         ockam --version
         echo $(which ockam)
         echo $BATS_TEST_RETRIES
-        bash implementations/rust/ockam/ockam_command/tests/bats/run.sh
+        bash implementations/rust/ockam/ockam_command/tests/bats/run.sh local
+        sudo PATH=$PATH BATS_LIB=$BATS_LIB bash implementations/rust/ockam/ockam_command/tests/bats/run.sh local_as_root
       env:
         OCKAM_DISABLE_UPGRADE_CHECK: 1
         BATS_TEST_RETRIES: 2
+
+    - if: ${{ always() }}
+      shell: bash
+      run: |
+        set -x
+        home_dir=$(echo ~)
+        echo "$home_dir"
+        echo "HOME_DIR=$home_dir" >> $GITHUB_ENV
+        mkdir -p ~/.bats-tests/
+
+        if sudo ls -a /root/.bats-tests; then
+          sudo tar -czvf "${home_dir}/.bats-tests/root_tests.tar.gz" -C /root/.bats-tests .
+          tar -ztvf "${home_dir}/.bats-tests/root_tests.tar.gz"
+        fi
+
+        ls -a /home/runner/.bats-tests
+
+    - if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.run_id }}-ockam-bats-logs
+        path: ${{ env.HOME_DIR }}/.bats-tests/*
+        include-hidden-files: true
+
+    - if: ${{ always() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.run_id }}-ockam-home
+        path: ${{ env.HOME_DIR }}/.ockam/*
+        include-hidden-files: true
 
     - name: Nix Upload Store
       uses: ./ockam_bats/.github/actions/nix_upload_store
@@ -342,6 +370,11 @@ jobs:
           toolchain: stable
           target: armv7-unknown-linux-musleabihf
           use-cross-build: true
+        - build: linux_aarch64_gnu
+          os: ubuntu-22.04
+          toolchain: stable
+          target: aarch64-unknown-linux-gnu
+          use-cross-build: true
         - build: macos_silicon
           os: macos-14
           toolchain: stable
@@ -350,7 +383,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout repository
-      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       with:
         ref: ${{ inputs.commit_sha }}
 

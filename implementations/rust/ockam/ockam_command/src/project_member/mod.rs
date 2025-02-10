@@ -14,14 +14,13 @@ use ockam::identity::{AttributesEntry, Identifier};
 use ockam_api::authenticator::direct::{
     OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE, OCKAM_ROLE_ATTRIBUTE_KEY,
 };
-use ockam_api::cloud::project::Project;
-use ockam_api::cloud::AuthorityNodeClient;
 use ockam_api::colors::{color_primary, color_warn};
 use ockam_api::nodes::{InMemoryNode, NodeManager};
+use ockam_api::orchestrator::project::Project;
+use ockam_api::orchestrator::AuthorityNodeClient;
 use ockam_api::output::Output;
 use ockam_api::terminal::fmt;
 use ockam_api::CliState;
-use ockam_multiaddr::{proto, MultiAddr, Protocol};
 use ockam_node::Context;
 
 use crate::project_member::show::ShowCommand;
@@ -29,7 +28,7 @@ use crate::shared_args::IdentityOpts;
 use crate::{docs, Command, CommandGlobalOpts};
 
 mod add;
-mod delete;
+pub(crate) mod delete;
 mod list;
 mod list_ids;
 mod show;
@@ -50,13 +49,13 @@ pub struct ProjectMemberCommand {
 }
 
 impl ProjectMemberCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         match self.subcommand {
-            ProjectMemberSubcommand::List(c) => c.run(opts),
-            ProjectMemberSubcommand::ListIds(c) => c.run(opts),
-            ProjectMemberSubcommand::Add(c) => c.run(opts),
-            ProjectMemberSubcommand::Show(c) => c.run(opts),
-            ProjectMemberSubcommand::Delete(c) => c.run(opts),
+            ProjectMemberSubcommand::List(c) => c.run(ctx, opts).await,
+            ProjectMemberSubcommand::ListIds(c) => c.run(ctx, opts).await,
+            ProjectMemberSubcommand::Add(c) => c.run(ctx, opts).await,
+            ProjectMemberSubcommand::Show(c) => c.run(ctx, opts).await,
+            ProjectMemberSubcommand::Delete(c) => c.run(ctx, opts).await,
         }
     }
 
@@ -89,52 +88,23 @@ pub(super) async fn authority_client(
     ctx: &Context,
     opts: &CommandGlobalOpts,
     identity_opts: &IdentityOpts,
-    project_route: &Option<MultiAddr>,
+    project_name: &Option<String>,
 ) -> crate::Result<(AuthorityNodeClient, String)> {
-    let project = get_project(&opts.state, project_route).await?;
     let node =
-        InMemoryNode::start_with_project_name(ctx, &opts.state, Some(project.name().to_string()))
-            .await?;
+        InMemoryNode::start_with_project_name(ctx, &opts.state, project_name.clone()).await?;
+    let project = opts
+        .state
+        .projects()
+        .get_project_by_name_or_default(project_name)
+        .await?;
     Ok((
-        create_authority_client(&node, &opts.state, identity_opts, &project).await?,
+        create_authority_client(ctx, &node, &opts.state, identity_opts, &project).await?,
         project.name().to_string(),
     ))
 }
 
-/// Get the project authority from the first address protocol.
-///
-/// If the first protocol is a `/project`, look up the project's config.
-pub(super) async fn get_project(
-    cli_state: &CliState,
-    input: &Option<MultiAddr>,
-) -> crate::Result<Project> {
-    let project_name = match input {
-        Some(input) => match input.first() {
-            Some(proto) if proto.code() == proto::Project::CODE => Some(
-                proto
-                    .cast::<proto::Project>()
-                    .expect("project protocol")
-                    .to_string(),
-            ),
-            _ => return Err(miette!("Invalid project address '{}'.", input.to_string()))?,
-        },
-        None => None,
-    };
-
-    match cli_state
-        .projects()
-        .get_project_by_name_or_default(&project_name)
-        .await
-        .ok()
-    {
-        None => Err(miette!(
-            "Project not found. Run 'ockam project list' to get a list of available projects.",
-        ))?,
-        Some(project) => Ok(project),
-    }
-}
-
 pub(super) async fn create_authority_client(
+    ctx: &Context,
     node: &NodeManager,
     cli_state: &CliState,
     identity_opts: &IdentityOpts,
@@ -144,9 +114,8 @@ pub(super) async fn create_authority_client(
         .get_identity_name_or_default(&identity_opts.identity_name)
         .await?;
 
-    Ok(node
-        .create_authority_client(project, Some(identity))
-        .await?)
+    node.create_authority_client_with_project(ctx, project, Some(identity))
+        .await
 }
 
 pub(crate) fn create_member_attributes(
@@ -190,30 +159,32 @@ impl MemberOutput {
             attributes,
         }
     }
+}
 
-    fn to_string(&self, padding: &str) -> ockam_api::Result<String> {
+impl Output for MemberOutput {
+    fn item(&self) -> ockam_api::Result<String> {
         let mut f = String::new();
         writeln!(
             f,
             "{}{}",
-            padding,
+            fmt::PADDING,
             color_primary(self.identifier.to_string())
         )?;
 
         if self.attributes.attrs().is_empty() {
-            writeln!(f, "{}Has no attributes", padding)?;
+            writeln!(f, "{}Has no attributes", fmt::PADDING)?;
         } else {
             let attributes = self.attributes.deserialized_key_value_attrs();
             writeln!(
                 f,
                 "{}With attributes: {}",
-                padding,
+                fmt::PADDING,
                 color_primary(attributes.join(", "))
             )?;
             writeln!(
                 f,
                 "{}{}Added at: {}",
-                padding,
+                fmt::PADDING,
                 fmt::INDENTATION,
                 color_warn(self.attributes.added_at().to_string())
             )?;
@@ -221,7 +192,7 @@ impl MemberOutput {
                 writeln!(
                     f,
                     "{}{}Expires at: {}",
-                    padding,
+                    fmt::PADDING,
                     fmt::INDENTATION,
                     color_warn(expires_at.to_string())
                 )?;
@@ -230,22 +201,12 @@ impl MemberOutput {
                 writeln!(
                     f,
                     "{}{}Attested by: {}",
-                    padding,
+                    fmt::PADDING,
                     fmt::INDENTATION,
                     color_primary(attested_by.to_string())
                 )?;
             }
         }
         Ok(f)
-    }
-}
-
-impl Output for MemberOutput {
-    fn item(&self) -> ockam_api::Result<String> {
-        self.to_string(fmt::PADDING)
-    }
-
-    fn as_list_item(&self) -> ockam_api::Result<String> {
-        self.to_string("")
     }
 }

@@ -9,6 +9,7 @@ use ockam_core::errcode::{Kind, Origin};
 use ockam_core::{route, Address, AllowAll, Error};
 use ockam_multiaddr::MultiAddr;
 use ockam_node::Context;
+use ockam_transport_core::HostnamePort;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,20 +35,20 @@ async fn inlet_outlet_local_successful(context: &mut Context) -> ockam::Result<(
             Some(Address::from_string("outlet")),
             true,
             OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+            false,
+            false,
+            false,
         )
         .await?;
 
-    assert_eq!(
-        outlet_status.socket_addr,
-        echo_server_handle.chosen_addr.to_socket_addr()?
-    );
+    assert_eq!(outlet_status.to, echo_server_handle.chosen_addr);
     assert_eq!(outlet_status.worker_addr.address(), "outlet");
 
     let inlet_status = node_manager_handle
         .node_manager
         .create_inlet(
             context,
-            "127.0.0.1:0".to_string(),
+            HostnamePort::localhost(0),
             route![],
             route![],
             MultiAddr::from_str("/secure/api/service/outlet")?,
@@ -56,6 +57,10 @@ async fn inlet_outlet_local_successful(context: &mut Context) -> ockam::Result<(
             None,
             None,
             true,
+            None,
+            false,
+            false,
+            false,
             None,
             false,
             false,
@@ -91,7 +96,7 @@ fn portal_node_goes_down_reconnect() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let handle = runtime.handle();
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<()> = handle.block_on(async move {
         let test_body = async move {
@@ -110,6 +115,9 @@ fn portal_node_goes_down_reconnect() {
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
+                    false,
+                    false,
                 )
                 .await?;
 
@@ -120,7 +128,7 @@ fn portal_node_goes_down_reconnect() {
                 .node_manager
                 .create_inlet(
                     &first_node.context,
-                    "127.0.0.1:0".to_string(),
+                    HostnamePort::localhost(0),
                     route![],
                     route![],
                     second_node_listen_address
@@ -131,6 +139,10 @@ fn portal_node_goes_down_reconnect() {
                     None,
                     None,
                     true,
+                    None,
+                    false,
+                    false,
+                    false,
                     None,
                     false,
                     false,
@@ -147,7 +159,7 @@ fn portal_node_goes_down_reconnect() {
             socket.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf, b"hello");
 
-            second_node.context.stop().await?;
+            second_node.context.shutdown_node().await?;
 
             // now let's verify the inlet has been detected as down
             loop {
@@ -178,6 +190,9 @@ fn portal_node_goes_down_reconnect() {
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
+                    false,
+                    false,
                 )
                 .await?;
 
@@ -201,8 +216,8 @@ fn portal_node_goes_down_reconnect() {
             socket.read_exact(&mut buf).await.unwrap();
             assert_eq!(&buf, b"hello");
 
-            third_node.context.stop().await?;
-            first_node.context.stop().await?;
+            third_node.context.shutdown_node().await?;
+            first_node.context.shutdown_node().await?;
 
             Ok(())
         };
@@ -218,12 +233,12 @@ fn portal_node_goes_down_reconnect() {
 #[test]
 fn portal_low_bandwidth_connection_keep_working_for_60s() {
     // in this test we use two nodes, connected through a passthrough server
-    // which limits the bandwidth to 64kb per second
+    // which limits the bandwidth to 170kb per second
     //
     // ┌────────┐     ┌───────────┐        ┌────────┐
     // │  Node  └─────►    TCP    └────────►  Node  │
     // │   1    ◄─────┐Passthrough◄────────┐   2    │
-    // └────┬───┘     │  64KB/s   │        └────▲───┘
+    // └────┬───┘     │  170KB/s  │        └────▲───┘
     //      │         └───────────┘             │
     //      │         ┌───────────┐             │
     //      │ Portal  │   TCP     │      Outlet │
@@ -233,7 +248,7 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let handle = runtime.handle();
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<()> = handle.block_on(async move {
         let test_body = async move {
@@ -252,6 +267,9 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
+                    false,
+                    false,
                 )
                 .await?;
 
@@ -264,8 +282,8 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
 
             let passthrough_server_handle = start_passthrough_server(
                 &second_node_listen_address.to_string(),
-                Disruption::LimitBandwidth(64 * 1024),
-                Disruption::LimitBandwidth(64 * 1024),
+                Disruption::LimitBandwidth(170 * 1024),
+                Disruption::LimitBandwidth(170 * 1024),
             )
             .await;
 
@@ -274,7 +292,7 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
                 .node_manager
                 .create_inlet(
                     &first_node.context,
-                    "127.0.0.1:0".to_string(),
+                    HostnamePort::localhost(0),
                     route![],
                     route![],
                     InternetAddress::from(passthrough_server_handle.chosen_addr)
@@ -285,6 +303,10 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
                     None,
                     None,
                     true,
+                    None,
+                    false,
+                    false,
+                    false,
                     None,
                     false,
                     false,
@@ -332,8 +354,8 @@ fn portal_low_bandwidth_connection_keep_working_for_60s() {
                 tokio::time::sleep(Duration::from_millis(1000)).await;
             }
 
-            second_node.context.stop().await?;
-            first_node.context.stop().await?;
+            second_node.context.shutdown_node().await?;
+            first_node.context.shutdown_node().await?;
 
             Ok(())
         };
@@ -351,7 +373,7 @@ fn portal_heavy_load_exchanged() {
     let runtime = Arc::new(Runtime::new().unwrap());
     let handle = runtime.handle();
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<()> = handle.block_on(async move {
         let test_body = async move {
@@ -370,6 +392,9 @@ fn portal_heavy_load_exchanged() {
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
+                    false,
+                    false,
                 )
                 .await?;
 
@@ -385,7 +410,7 @@ fn portal_heavy_load_exchanged() {
                 .node_manager
                 .create_inlet(
                     &first_node.context,
-                    "127.0.0.1:0".to_string(),
+                    HostnamePort::localhost(0),
                     route![],
                     route![],
                     second_node_listen_address
@@ -396,6 +421,10 @@ fn portal_heavy_load_exchanged() {
                     None,
                     None,
                     true,
+                    None,
+                    false,
+                    false,
+                    false,
                     None,
                     false,
                     false,
@@ -440,8 +469,8 @@ fn portal_heavy_load_exchanged() {
             assert!(payload == incoming_buffer);
 
             let _ = join_tx.await.unwrap();
-            second_node.context.stop().await?;
-            first_node.context.stop().await?;
+            second_node.context.shutdown_node().await?;
+            first_node.context.shutdown_node().await?;
 
             Ok(())
         };
@@ -494,7 +523,7 @@ fn test_portal_payload_transfer(outgoing_disruption: Disruption, incoming_disrup
     let runtime = Arc::new(Runtime::new().unwrap());
     let handle = runtime.handle();
     let runtime_cloned = runtime.clone();
-    std::env::set_var("OCKAM_LOG", "none");
+    std::env::remove_var("OCKAM_LOG_LEVEL");
 
     let result: ockam::Result<_> = handle.block_on(async move {
         let test_body = async move {
@@ -513,6 +542,9 @@ fn test_portal_payload_transfer(outgoing_disruption: Disruption, incoming_disrup
                     Some(Address::from_string("outlet")),
                     true,
                     OutletAccessControl::AccessControl((Arc::new(AllowAll), Arc::new(AllowAll))),
+                    false,
+                    false,
+                    false,
                 )
                 .await?;
 
@@ -535,7 +567,7 @@ fn test_portal_payload_transfer(outgoing_disruption: Disruption, incoming_disrup
                 .node_manager
                 .create_inlet(
                     &first_node.context,
-                    "127.0.0.1:0".to_string(),
+                    HostnamePort::localhost(0),
                     route![],
                     route![],
                     InternetAddress::from(passthrough_server_handle.chosen_addr)
@@ -546,6 +578,10 @@ fn test_portal_payload_transfer(outgoing_disruption: Disruption, incoming_disrup
                     None,
                     None,
                     true,
+                    None,
+                    false,
+                    false,
+                    false,
                     None,
                     false,
                     false,
@@ -589,8 +625,8 @@ fn test_portal_payload_transfer(outgoing_disruption: Disruption, incoming_disrup
             // using assert to avoid MB of data being shown in the logs
             assert!(random_buffer[0..size] == incoming_buffer[0..size]);
 
-            second_node.context.stop().await?;
-            first_node.context.stop().await?;
+            second_node.context.shutdown_node().await?;
+            first_node.context.shutdown_node().await?;
 
             Ok(())
         };

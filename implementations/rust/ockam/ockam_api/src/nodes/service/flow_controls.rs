@@ -1,14 +1,15 @@
+#![allow(clippy::unconditional_recursion)]
 use ockam_core::api::{Error, Response};
 use ockam_core::flow_control::FlowControlId;
 use ockam_core::Result;
 use ockam_multiaddr::MultiAddr;
 use ockam_node::Context;
-
-use crate::local_multiaddr_to_route;
-use crate::nodes::models::flow_controls::AddConsumer;
-use crate::nodes::NodeManager;
+use std::fmt::Display;
 
 use super::NodeManagerWorker;
+use crate::nodes::models::flow_controls::AddConsumer;
+use crate::nodes::NodeManager;
+use crate::LocalMultiaddrResolver;
 
 impl NodeManagerWorker {
     pub(super) async fn add_consumer(
@@ -38,7 +39,7 @@ impl NodeManager {
         consumer: &MultiAddr,
         flow_control_id: &FlowControlId,
     ) -> Result<Option<AddConsumerError>> {
-        let mut route = local_multiaddr_to_route(consumer)?;
+        let mut route = LocalMultiaddrResolver::resolve(consumer)?;
 
         let address = match route.step().ok() {
             Some(a) => a,
@@ -48,7 +49,7 @@ impl NodeManager {
             return Ok(Some(AddConsumerError::InvalidAddress(consumer.clone())));
         };
 
-        ctx.flow_controls().add_consumer(address, flow_control_id);
+        ctx.flow_controls().add_consumer(&address, flow_control_id);
 
         Ok(None)
     }
@@ -59,13 +60,16 @@ pub enum AddConsumerError {
     EmptyAddress(MultiAddr),
 }
 
-impl ToString for AddConsumerError {
-    fn to_string(&self) -> String {
+impl Display for AddConsumerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AddConsumerError::EmptyAddress(address) => {
-                format!("Unable to extract an address from the route: {address:?}.")
+                write!(
+                    f,
+                    "Unable to extract an address from the route: {address:?}."
+                )
             }
-            AddConsumerError::InvalidAddress(address) => format!("Invalid address: {address:?}."),
+            AddConsumerError::InvalidAddress(address) => write!(f, "Invalid address: {address:?}."),
         }
     }
 }

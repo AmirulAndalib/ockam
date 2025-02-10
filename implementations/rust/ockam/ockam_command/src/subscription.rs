@@ -3,14 +3,13 @@ use clap::{Args, Subcommand};
 use miette::{miette, IntoDiagnostic};
 
 use ockam::Context;
-use ockam_api::cloud::subscription::{Subscription, Subscriptions};
-use ockam_api::cloud::ControllerClient;
+use ockam_api::orchestrator::subscription::{SubscriptionLegacy, Subscriptions};
+use ockam_api::orchestrator::ControllerClient;
 
 use ockam_api::nodes::InMemoryNode;
 use ockam_api::output::Output;
 
 use crate::shared_args::IdentityOpts;
-use crate::util::async_cmd;
 use crate::{docs, CommandGlobalOpts, Result};
 
 #[derive(Clone, Debug, Args)]
@@ -46,12 +45,6 @@ pub enum SubscriptionSubcommand {
 }
 
 impl SubscriptionCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         match &self.subcommand {
             SubscriptionSubcommand::Show { .. } => "subscription show",
@@ -59,7 +52,7 @@ impl SubscriptionCommand {
         .to_string()
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         let node = InMemoryNode::start(ctx, &opts.state).await?;
         let controller = node.create_controller().await?;
 
@@ -92,7 +85,7 @@ pub(crate) async fn get_subscription_by_id_or_space_id(
     ctx: &Context,
     subscription_id: Option<String>,
     space_id: Option<String>,
-) -> Result<Option<Subscription>> {
+) -> Result<Option<SubscriptionLegacy>> {
     match (subscription_id, space_id) {
         (Some(subscription_id), _) => Ok(Some(
             controller

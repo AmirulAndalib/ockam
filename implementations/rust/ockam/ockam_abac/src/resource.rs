@@ -1,12 +1,12 @@
 use crate::ResourceName;
 use core::fmt::{Display, Formatter};
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use ockam_core::compat::string::{String, ToString};
 use ockam_core::compat::vec::Vec;
 use serde::{Serialize, Serializer};
 use strum::{AsRefStr, Display, EnumIter, EnumString, IntoEnumIterator};
 
-#[derive(Clone, Debug, Encode, Decode, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, CborLen, PartialEq)]
 #[rustfmt::skip]
 #[cbor(map)]
 pub struct Resource {
@@ -33,7 +33,9 @@ impl Display for Resource {
     }
 }
 
-#[derive(Clone, Debug, Decode, Encode, PartialEq, Eq, EnumString, Display, EnumIter, AsRefStr)]
+#[derive(
+    Clone, Debug, Encode, Decode, CborLen, PartialEq, Eq, EnumString, Display, EnumIter, AsRefStr,
+)]
 #[cbor(index_only)]
 pub enum ResourceType {
     #[n(1)]
@@ -54,6 +56,9 @@ pub enum ResourceType {
     #[n(6)]
     #[strum(serialize = "relay")]
     Relay,
+    #[n(7)]
+    #[strum(serialize = "lessor")]
+    InfluxDBLessor,
 }
 
 impl ResourceType {

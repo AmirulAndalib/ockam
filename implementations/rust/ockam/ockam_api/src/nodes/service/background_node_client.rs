@@ -4,6 +4,7 @@ use std::time::Duration;
 use miette::{miette, IntoDiagnostic};
 use minicbor::{Decode, Encode};
 
+use ockam::identity::get_default_timeout;
 use ockam::tcp::{TcpConnection, TcpConnectionOptions, TcpTransport};
 use ockam_core::api::{Reply, Request};
 use ockam_core::Route;
@@ -43,15 +44,15 @@ impl BackgroundNodeClient {
             Some(name) => name,
             None => cli_state.get_default_node().await?.name(),
         };
-        Self::create_to_node(ctx, cli_state, &node_name).await
+        Self::create_to_node(ctx, cli_state, &node_name)
     }
 
-    pub async fn create_to_node(
+    pub fn create_to_node(
         ctx: &Context,
         cli_state: &CliState,
         node_name: &str,
     ) -> miette::Result<BackgroundNodeClient> {
-        let tcp_transport = TcpTransport::create(ctx).await.into_diagnostic()?;
+        let tcp_transport = TcpTransport::create(ctx).into_diagnostic()?;
         BackgroundNodeClient::new(&tcp_transport, cli_state, node_name)
     }
 
@@ -73,13 +74,13 @@ impl BackgroundNodeClient {
             cli_state: cli_state.clone(),
             node_name: node_name.to_string(),
             to: NODEMANAGER_ADDR.into(),
-            timeout: Some(Duration::from_secs(30)),
+            timeout: Some(get_default_timeout()),
             tcp_transport: Arc::new(tcp_transport.clone()),
         })
     }
 
     pub async fn delete(&self) -> miette::Result<()> {
-        Ok(self.cli_state.delete_node(&self.node_name(), false).await?)
+        Ok(self.cli_state.delete_node(self.node_name()).await?)
     }
 
     // Set a different node name
@@ -88,8 +89,8 @@ impl BackgroundNodeClient {
         self
     }
 
-    pub fn node_name(&self) -> String {
-        self.node_name.clone()
+    pub fn node_name(&self) -> &str {
+        &self.node_name
     }
 
     /// Use a default timeout for making requests
@@ -139,7 +140,7 @@ impl BackgroundNodeClient {
             .success()
             .into_diagnostic();
 
-        _ = tcp_connection.stop(ctx).await;
+        let _ = tcp_connection.stop(ctx);
         res
     }
 
@@ -157,7 +158,7 @@ impl BackgroundNodeClient {
         let (tcp_connection, client) = self.make_client().await?;
         let res = client.ask(ctx, req).await.into_diagnostic();
 
-        _ = tcp_connection.stop(ctx).await;
+        let _ = tcp_connection.stop(ctx);
         res
     }
 
@@ -174,7 +175,7 @@ impl BackgroundNodeClient {
             .success()
             .into_diagnostic();
 
-        _ = tcp_connection.stop(ctx).await;
+        let _ = tcp_connection.stop(ctx);
         res
     }
 
@@ -190,32 +191,26 @@ impl BackgroundNodeClient {
         let (tcp_connection, client) = self.make_client().await?;
         let res = client.tell(ctx, req).await.into_diagnostic();
 
-        _ = tcp_connection.stop(ctx).await;
+        let _ = tcp_connection.stop(ctx);
         res
     }
 
-    /// This method succeeds if a TCP connection can be established with the node
-    pub async fn is_accessible(&self, ctx: &Context) -> miette::Result<()> {
-        self.create_tcp_connection()
-            .await?
-            .stop(ctx)
-            .await
-            .into_diagnostic()
-    }
-
     /// Make a route to the node and connect using TCP
-    async fn create_route(&self) -> miette::Result<(TcpConnection, Route)> {
-        let tcp_connection = self.create_tcp_connection().await?;
-        let mut route = self.to.clone();
-        route
-            .modify()
-            .prepend(tcp_connection.sender_address().clone());
+    async fn create_route(
+        &self,
+        timeout: Option<Duration>,
+    ) -> miette::Result<(TcpConnection, Route)> {
+        let tcp_connection = self.create_tcp_connection(timeout).await?;
+        let route = tcp_connection.sender_address().clone() + self.to.clone();
         debug!("Sending requests to {route}");
         Ok((tcp_connection, route))
     }
 
     /// Create a TCP connection to the node
-    async fn create_tcp_connection(&self) -> miette::Result<TcpConnection> {
+    async fn create_tcp_connection(
+        &self,
+        timeout: Option<Duration>,
+    ) -> miette::Result<TcpConnection> {
         let node_info = self.cli_state.get_node(&self.node_name).await?;
         let tcp_listener_address = node_info
             .tcp_listener_address()
@@ -226,7 +221,10 @@ impl BackgroundNodeClient {
             .to_string();
 
         self.tcp_transport
-            .connect(&tcp_listener_address, TcpConnectionOptions::new())
+            .connect(
+                &tcp_listener_address,
+                TcpConnectionOptions::new().set_timeout(timeout),
+            )
             .await
             .map_err(|_| {
                 miette!(
@@ -248,7 +246,7 @@ impl BackgroundNodeClient {
         &self,
         timeout: Option<Duration>,
     ) -> miette::Result<(TcpConnection, Client)> {
-        let (tcp_connection, route) = self.create_route().await?;
+        let (tcp_connection, route) = self.create_route(timeout).await?;
         Ok((tcp_connection, Client::new(&route, timeout)))
     }
 }

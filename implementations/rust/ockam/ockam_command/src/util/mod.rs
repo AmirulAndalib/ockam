@@ -1,134 +1,27 @@
-use std::sync::Arc;
 use std::{
     net::{SocketAddr, TcpListener},
     path::Path,
 };
 
-use colorful::core::color_string::CString;
 use colorful::Colorful;
-use miette::Context as _;
-use miette::{miette, IntoDiagnostic};
-use opentelemetry::trace::FutureExt;
-use tokio::runtime::Runtime;
-use tracing::{debug, error};
-
-use ockam::{Address, Context, NodeBuilder};
+use miette::miette;
 use ockam_api::cli_state::CliState;
-use ockam_api::cli_state::CliStateError;
-use ockam_api::colors::{color_primary, OckamColor};
+use ockam_api::colors::color_primary;
 use ockam_api::config::lookup::{InternetAddress, LookupMeta};
-use ockam_api::{fmt_warn, ConnectionStatus};
-use ockam_core::{DenyAll, OpenTelemetryContext};
+use ockam_api::fmt_warn;
 use ockam_multiaddr::proto::{DnsAddr, Ip4, Ip6, Project, Space, Tcp};
 use ockam_multiaddr::{proto::Node, MultiAddr, Protocol};
 
 use crate::{CommandGlobalOpts, Result};
 
+#[allow(unused)]
 pub mod api;
 pub mod exitcode;
+pub mod foreground_args;
+#[allow(unused)]
 pub mod parsers;
+#[allow(unused)]
 pub mod validators;
-
-pub fn local_cmd(res: miette::Result<()>) -> miette::Result<()> {
-    if let Err(error) = &res {
-        // Note: error! is also called in command_event.rs::add_command_error_event()
-        error!(%error, "Failed to run command");
-    }
-    res
-}
-
-pub fn async_cmd<F, Fut>(command_name: &str, opts: CommandGlobalOpts, f: F) -> miette::Result<()>
-where
-    F: FnOnce(Context) -> Fut + Send + Sync + 'static,
-    Fut: core::future::Future<Output = miette::Result<()>> + Send + 'static,
-{
-    debug!("running '{}' asynchronously", command_name);
-    let res = embedded_node(opts, |ctx| {
-        async move { f(ctx).await }.with_context(OpenTelemetryContext::current_context())
-    });
-    local_cmd(res)
-}
-
-pub fn embedded_node<F, Fut, T, E>(opts: CommandGlobalOpts, f: F) -> core::result::Result<T, E>
-where
-    F: FnOnce(Context) -> Fut + Send + Sync + 'static,
-    Fut: core::future::Future<Output = core::result::Result<T, E>> + Send + 'static,
-    T: Send + 'static,
-    E: Send + Sync + From<CliStateError> + 'static,
-{
-    let (ctx, mut executor) = NodeBuilder::new()
-        .no_logging()
-        .with_runtime(opts.rt)
-        .build();
-    let res = executor.execute(
-        async move {
-            let child_ctx = ctx
-                .new_detached(
-                    Address::random_tagged("Detached.embedded_node"),
-                    DenyAll,
-                    DenyAll,
-                )
-                .await
-                .expect("Embedded node child ctx can't be created");
-            let r = f(child_ctx).await;
-            let _ = ctx.stop().await;
-            r
-        }
-        .with_context(OpenTelemetryContext::current_context()),
-    );
-    match res {
-        Ok(Err(e)) => Err(e),
-        Ok(Ok(t)) => Ok(t),
-        Err(e) => Err(CliStateError::Ockam(e).into()),
-    }
-}
-
-pub fn embedded_node_that_is_not_stopped<F, Fut, T>(rt: Arc<Runtime>, f: F) -> miette::Result<T>
-where
-    F: FnOnce(Context) -> Fut + Send + Sync + 'static,
-    Fut: core::future::Future<Output = miette::Result<T>> + Send + 'static,
-    T: Send + 'static,
-{
-    let (ctx, mut executor) = NodeBuilder::new().no_logging().with_runtime(rt).build();
-    let res = executor.execute(async move {
-        let child_ctx = ctx
-            .new_detached(
-                Address::random_tagged("Detached.embedded_node.not_stopped"),
-                DenyAll,
-                DenyAll,
-            )
-            .await
-            .expect("Embedded node child ctx can't be created");
-        let result = f(child_ctx).await;
-        let result = if result.is_err() {
-            ctx.stop().await?;
-            result
-        } else {
-            result
-        };
-        result.map_err(|e| {
-            ockam_core::Error::new(
-                ockam_core::errcode::Origin::Executor,
-                ockam_core::errcode::Kind::Unknown,
-                e,
-            )
-        })
-    });
-
-    let res = res.map_err(|e| miette::miette!(e));
-    res?.into_diagnostic()
-}
-
-pub fn find_available_port() -> Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .into_diagnostic()
-        .context("Unable to bind to an open port")?;
-    let address = listener
-        .local_addr()
-        .into_diagnostic()
-        .context("Unable to get local address")?;
-    Ok(address.port())
-}
 
 #[allow(unused)]
 pub fn print_path(p: &Path) -> String {
@@ -205,6 +98,9 @@ pub async fn clean_nodes_multiaddr(
 
 pub fn port_is_free_guard(address: &SocketAddr) -> Result<()> {
     let port = address.port();
+    if port == 0 {
+        return Ok(());
+    }
     let ip = address.ip();
     if TcpListener::bind((ip, port)).is_err() {
         Err(miette!(
@@ -214,16 +110,11 @@ pub fn port_is_free_guard(address: &SocketAddr) -> Result<()> {
     Ok(())
 }
 
-pub fn colorize_connection_status(status: ConnectionStatus) -> CString {
-    let text = status.to_string();
-    match status {
-        ConnectionStatus::Up => text.color(OckamColor::PrimaryResource.color()),
-        ConnectionStatus::Down => text.color(OckamColor::Failure.color()),
-        ConnectionStatus::Degraded => text.color(OckamColor::Failure.color()),
-    }
-}
-
-pub fn print_deprecated_warning(opts: &CommandGlobalOpts, old: &str, new: &str) -> Result<()> {
+pub fn print_warning_for_deprecated_flag_replaced(
+    opts: &CommandGlobalOpts,
+    old: &str,
+    new: &str,
+) -> Result<()> {
     opts.terminal.write_line(fmt_warn!(
         "{} is deprecated. Please use {} instead",
         color_primary(old),
@@ -232,12 +123,22 @@ pub fn print_deprecated_warning(opts: &CommandGlobalOpts, old: &str, new: &str) 
     Ok(())
 }
 
+pub fn print_warning_for_deprecated_flag_no_effect(
+    opts: &CommandGlobalOpts,
+    deprecated: &str,
+) -> Result<()> {
+    opts.terminal.write_line(fmt_warn!(
+        "{} is deprecated. This flag has no effect",
+        color_primary(deprecated),
+    ))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-
-    use std::str::FromStr;
-
     use super::*;
+    use ockam_node::Context;
+    use std::str::FromStr;
 
     #[ockam_macros::test(crate = "ockam")]
     async fn test_process_multi_addr(_ctx: &mut Context) -> ockam::Result<()> {
@@ -277,35 +178,5 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn test_execute_error() {
-        let result = embedded_node_that_is_not_stopped(
-            Arc::new(Runtime::new().unwrap()),
-            |ctx| async move { function_returning_an_error(ctx, 1).await },
-        );
-        assert!(result.is_err());
-
-        async fn function_returning_an_error(_ctx: Context, _parameter: u8) -> miette::Result<()> {
-            Err(miette!("boom"))
-        }
-    }
-
-    #[test]
-    fn test_execute_error_() {
-        let result = embedded_node_that_is_not_stopped(
-            Arc::new(Runtime::new().unwrap()),
-            |ctx| async move { function_returning_an_error_and_stopping_the_context(ctx, 1).await },
-        );
-        assert!(result.is_err());
-
-        async fn function_returning_an_error_and_stopping_the_context(
-            ctx: Context,
-            _parameter: u8,
-        ) -> miette::Result<()> {
-            ctx.stop().await.into_diagnostic()?;
-            Err(miette!("boom"))
-        }
     }
 }

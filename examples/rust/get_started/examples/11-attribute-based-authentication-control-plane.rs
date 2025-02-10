@@ -8,12 +8,13 @@ use ockam::identity::{
 };
 use ockam::remote::RemoteRelayOptions;
 use ockam::tcp::{TcpOutletOptions, TcpTransportExtension};
+use ockam::transport::HostnamePort;
 use ockam::{node, Context, Result};
 use ockam_api::authenticator::enrollment_tokens::TokenAcceptor;
 use ockam_api::authenticator::one_time_code::OneTimeCode;
 use ockam_api::nodes::NodeManager;
-use ockam_api::{multiaddr_to_route, multiaddr_to_transport_route};
-use ockam_core::AsyncTryClone;
+use ockam_api::{RemoteMultiaddrResolver, TransportRouteResolver};
+use ockam_core::TryClone;
 use ockam_multiaddr::MultiAddr;
 
 /// This node supports a "control" server on which several "edge" devices can connect
@@ -53,7 +54,7 @@ async fn start_node(ctx: Context, project_information_path: &str, token: OneTime
     // Create a node with default implementations
     let node = node(ctx).await?;
     // Initialize the TCP transport
-    let tcp = node.create_tcp_transport().await?;
+    let tcp = node.create_tcp_transport()?;
 
     // Create an Identity for the control node
     let control_plane = node.create_identity().await?;
@@ -74,11 +75,13 @@ async fn start_node(ctx: Context, project_information_path: &str, token: OneTime
     authority_node.present_token(node.context(), token).await.unwrap();
 
     let project = import_project(project_information_path, node.identities()).await?;
-    let project_authority_route = multiaddr_to_transport_route(&project.authority_route()).unwrap(); // FIXME: Handle error
+    let project_authority_route = TransportRouteResolver::default()
+        .allow_tcp()
+        .resolve(&project.authority_route())?;
 
     // Create a credential retriever that will be used to obtain credentials
     let credential_retriever = Arc::new(RemoteCredentialRetrieverCreator::new(
-        node.context().async_try_clone().await?,
+        node.context().try_clone()?,
         Arc::new(tcp.clone()),
         node.secure_channels(),
         RemoteCredentialRetrieverInfo::create_for_project_member(
@@ -101,22 +104,23 @@ async fn start_node(ctx: Context, project_information_path: &str, token: OneTime
         Some(project.authority_identifier()),
         "component",
         "edge",
-    )
-    .await?;
+    )?;
 
     // 4. create a tcp outlet with the above policy
     tcp.create_outlet(
         "outlet",
-        "127.0.0.1:5000",
+        HostnamePort::localhost(5000),
         TcpOutletOptions::new()
             .with_incoming_access_control_impl(incoming_access_control)
             .with_outgoing_access_control_impl(outgoing_access_control),
-    )
-    .await?;
+    )?;
 
     // 5. create a relay on the Ockam orchestrator
 
-    let tcp_project_route = multiaddr_to_route(&project.route(), &tcp).await.unwrap(); // FIXME: Handle error
+    let tcp_project_route = RemoteMultiaddrResolver::default()
+        .with_tcp(tcp.clone())
+        .resolve(&project.route())
+        .await?;
     let project_options = SecureChannelOptions::new()
         .with_credential_retriever_creator(credential_retriever)?
         .with_authority(project.authority_identifier())
@@ -137,8 +141,7 @@ async fn start_node(ctx: Context, project_information_path: &str, token: OneTime
 
     // 6. create a secure channel listener which will allow the edge node to
     //    start a secure channel when it is ready
-    node.create_secure_channel_listener(&control_plane, "untrusted", SecureChannelListenerOptions::new())
-        .await?;
+    node.create_secure_channel_listener(&control_plane, "untrusted", SecureChannelListenerOptions::new())?;
     println!("created a secure channel listener");
 
     // don't stop the node

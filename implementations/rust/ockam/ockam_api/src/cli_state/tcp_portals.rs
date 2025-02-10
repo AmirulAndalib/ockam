@@ -1,12 +1,12 @@
-use ockam_core::errcode::{Kind, Origin};
-use ockam_core::Address;
-use ockam_multiaddr::MultiAddr;
-use std::net::SocketAddr;
-
 use super::Result;
 use crate::cli_state::TcpInlet;
 use crate::nodes::models::portal::OutletStatus;
 use crate::CliState;
+use ockam_core::errcode::{Kind, Origin};
+use ockam_core::Address;
+use ockam_multiaddr::MultiAddr;
+use ockam_transport_core::HostnamePort;
+use std::net::SocketAddr;
 
 impl CliState {
     /// Create a TCP inlet
@@ -17,8 +17,9 @@ impl CliState {
         bind_addr: &SocketAddr,
         outlet_addr: &MultiAddr,
         alias: &str,
+        privileged: bool,
     ) -> Result<TcpInlet> {
-        let tcp_inlet = TcpInlet::new(bind_addr, outlet_addr, alias);
+        let tcp_inlet = TcpInlet::new(bind_addr, outlet_addr, alias, privileged);
         self.tcp_portals_repository()
             .store_tcp_inlet(node_name, &tcp_inlet)
             .await?;
@@ -32,11 +33,13 @@ impl CliState {
             .tcp_portals_repository()
             .get_tcp_inlet(node_name, alias)
             .await?
-            .ok_or(ockam_core::Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                format!("no tcp inlet found for node {node_name}, with alias {alias}"),
-            ))?)
+            .ok_or_else(|| {
+                ockam_core::Error::new(
+                    Origin::Api,
+                    Kind::NotFound,
+                    format!("no tcp inlet found for node {node_name}, with alias {alias}"),
+                )
+            })?)
     }
 
     /// Delete a TCP inlet
@@ -53,12 +56,13 @@ impl CliState {
     pub async fn create_tcp_outlet(
         &self,
         node_name: &str,
-        socket_addr: &SocketAddr,
+        to: &HostnamePort,
         worker_addr: &Address,
         payload: &Option<String>,
+        privileged: bool,
     ) -> Result<OutletStatus> {
         let tcp_outlet_status =
-            OutletStatus::new(*socket_addr, worker_addr.clone(), payload.clone());
+            OutletStatus::new(to.clone(), worker_addr.clone(), payload.clone(), privileged);
 
         self.tcp_portals_repository()
             .store_tcp_outlet(node_name, &tcp_outlet_status)

@@ -4,6 +4,96 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.69.0 - 2025-01-20
+
+### Added
+
+- Updated dependencies
+
+## 0.68.0 - 2025-01-09
+
+### Added
+
+- Updated dependencies
+
+## 0.67.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Updated dependencies
+
+## 0.66.0 - 2024-12-04
+
+### Added
+
+- Updated dependencies
+
+## 0.65.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.64.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+### Fixed
+
+- Error chain is kept in ockam_command crate
+
+## 0.63.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.62.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.61.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.60.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.59.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.58.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.57.0 - 2024-07-29
+
+### Added
+
+- Updated dependencies
+
+## 0.56.0 - 2024-07-01
+
+### Added
+
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
 ## 0.55.0 - 2024-06-25
 
 ### Added

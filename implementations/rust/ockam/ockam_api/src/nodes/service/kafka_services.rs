@@ -1,23 +1,12 @@
-use ockam::transport::HostnamePort;
-use ockam::{Address, Context, Result};
-use ockam_abac::PolicyExpression;
-use ockam_abac::{Action, Resource, ResourceType};
-use ockam_core::api::{Error, Response};
-use ockam_core::compat::net::SocketAddr;
-use ockam_core::compat::rand::random_string;
-use ockam_core::route;
-use ockam_multiaddr::proto::Project;
-use ockam_multiaddr::MultiAddr;
-use std::str::FromStr;
-use std::sync::Arc;
-
 use super::NodeManagerWorker;
 use crate::error::ApiError;
-use crate::kafka::secure_channel_map::controller::KafkaSecureChannelControllerImpl;
-use crate::kafka::OutletManagerService;
+use crate::kafka::key_exchange::controller::KafkaKeyExchangeControllerImpl;
+use crate::kafka::protocol_aware::inlet::KafkaInletInterceptorFactory;
+use crate::kafka::protocol_aware::outlet::KafkaOutletInterceptorFactory;
+use crate::kafka::KafkaOutletController;
 use crate::kafka::{
     kafka_policy_expression, ConsumerPublishing, ConsumerResolution, KafkaInletController,
-    KafkaPortalListener, KAFKA_OUTLET_BOOTSTRAP_ADDRESS, KAFKA_OUTLET_INTERCEPTOR_ADDRESS,
+    KAFKA_OUTLET_BOOTSTRAP_ADDRESS, KAFKA_OUTLET_INTERCEPTOR_ADDRESS,
 };
 use crate::nodes::models::portal::OutletAccessControl;
 use crate::nodes::models::services::{
@@ -27,6 +16,20 @@ use crate::nodes::registry::{KafkaServiceInfo, KafkaServiceKind};
 use crate::nodes::service::default_address::DefaultAddress;
 use crate::nodes::InMemoryNode;
 use crate::port_range::PortRange;
+use ockam::transport::HostnamePort;
+use ockam::{Address, Context, Result};
+use ockam_abac::PolicyExpression;
+use ockam_abac::{Action, Resource, ResourceType};
+use ockam_core::api::{Error, Response};
+use ockam_core::compat::rand::random_string;
+use ockam_core::flow_control::FlowControls;
+use ockam_core::route;
+use ockam_multiaddr::proto::Project;
+use ockam_multiaddr::MultiAddr;
+use ockam_transport_tcp::{
+    read_portal_payload_length, PortalInletInterceptor, PortalOutletInterceptor,
+};
+use std::sync::Arc;
 
 impl NodeManagerWorker {
     pub(super) async fn start_kafka_inlet_service(
@@ -44,6 +47,7 @@ impl NodeManagerWorker {
                 request.brokers_port_range(),
                 request.project_route(),
                 request.encrypt_content(),
+                request.encrypted_fields(),
                 request.consumer_resolution(),
                 request.consumer_publishing(),
                 request.inlet_policy_expression(),
@@ -111,11 +115,12 @@ impl InMemoryNode {
     pub async fn start_kafka_inlet_service(
         &self,
         context: &Context,
-        local_interceptor_address: Address,
-        bind_address: SocketAddr,
+        interceptor_address: Address,
+        bind_address: HostnamePort,
         brokers_port_range: (u16, u16),
         outlet_node_multiaddr: MultiAddr,
         encrypt_content: bool,
+        encrypted_fields: Vec<String>,
         consumer_resolution: ConsumerResolution,
         consumer_publishing: ConsumerPublishing,
         inlet_policy_expression: Option<PolicyExpression>,
@@ -126,7 +131,7 @@ impl InMemoryNode {
             .policy_access_control(
                 self.project_authority().clone(),
                 Resource::new(
-                    format!("kafka-consumer-{}", local_interceptor_address.address()),
+                    format!("kafka-consumer-{}", interceptor_address.address()),
                     ResourceType::KafkaConsumer,
                 ),
                 Action::HandleMessage,
@@ -138,7 +143,7 @@ impl InMemoryNode {
             .policy_access_control(
                 self.project_authority().clone(),
                 Resource::new(
-                    format!("kafka-producer-{}", local_interceptor_address.address()),
+                    format!("kafka-producer-{}", interceptor_address.address()),
                     ResourceType::KafkaProducer,
                 ),
                 Action::HandleMessage,
@@ -146,7 +151,7 @@ impl InMemoryNode {
             )
             .await?;
 
-        let secure_channel_controller = KafkaSecureChannelControllerImpl::new(
+        let secure_channel_controller = KafkaKeyExchangeControllerImpl::new(
             self.node_manager.clone(),
             self.secure_channels.clone(),
             consumer_resolution,
@@ -175,10 +180,11 @@ impl InMemoryNode {
         };
 
         let inlet_controller = KafkaInletController::new(
+            self.node_manager.clone(),
             outlet_node_multiaddr.clone(),
-            route![local_interceptor_address.clone()],
+            route![interceptor_address.clone()],
             route![KAFKA_OUTLET_INTERCEPTOR_ADDRESS],
-            bind_address.ip(),
+            bind_address.hostname(),
             PortRange::try_from(brokers_port_range)
                 .map_err(|_| ApiError::core("invalid port range"))?,
             inlet_policy_expression.clone(),
@@ -197,8 +203,8 @@ impl InMemoryNode {
         // create the kafka bootstrap inlet
         self.create_inlet(
             context,
-            bind_address.to_string(),
-            route![local_interceptor_address.clone()],
+            bind_address,
+            route![interceptor_address.clone()],
             route![
                 KAFKA_OUTLET_INTERCEPTOR_ADDRESS,
                 KAFKA_OUTLET_BOOTSTRAP_ADDRESS
@@ -212,39 +218,40 @@ impl InMemoryNode {
             None,
             false,
             false,
+            false,
+            None,
+            false,
+            false,
         )
         .await?;
 
         let policy_access_control = self
             .policy_access_control(
                 self.project_authority().clone(),
-                Resource::new(
-                    local_interceptor_address.to_string(),
-                    ResourceType::TcpInlet,
-                ),
+                Resource::new(interceptor_address.to_string(), ResourceType::TcpInlet),
                 Action::HandleMessage,
                 inlet_policy_expression,
             )
             .await?;
 
-        KafkaPortalListener::create(
+        PortalInletInterceptor::create(
             context,
-            encrypt_content,
-            inlet_controller,
-            secure_channel_controller,
-            local_interceptor_address.clone(),
+            interceptor_address.clone(),
+            Arc::new(KafkaInletInterceptorFactory::new(
+                secure_channel_controller,
+                inlet_controller,
+                encrypt_content,
+                encrypted_fields,
+            )),
             Arc::new(policy_access_control.create_incoming()),
-            Arc::new(policy_access_control.create_outgoing(context).await?),
-        )
-        .await?;
+            Arc::new(policy_access_control.create_outgoing(context)?),
+            read_portal_payload_length(),
+        )?;
 
-        self.registry
-            .kafka_services
-            .insert(
-                local_interceptor_address,
-                KafkaServiceInfo::new(KafkaServiceKind::Inlet),
-            )
-            .await;
+        self.registry.kafka_services.insert(
+            interceptor_address,
+            KafkaServiceInfo::new(KafkaServiceKind::Inlet),
+        );
 
         Ok(())
     }
@@ -253,7 +260,7 @@ impl InMemoryNode {
         &self,
         context: &Context,
         service_address: Address,
-        bootstrap_server_addr: String,
+        bootstrap_server_addr: HostnamePort,
         tls: bool,
         outlet_policy_expression: Option<PolicyExpression>,
     ) -> Result<()> {
@@ -273,39 +280,61 @@ impl InMemoryNode {
             )
             .await?;
 
-        OutletManagerService::create(
-            context,
-            default_secure_channel_listener_flow_control_id,
+        let spawner_flow_control_id = FlowControls::generate_flow_control_id();
+        let outlet_controller = KafkaOutletController::new(
+            self.node_manager.clone(),
             outlet_policy_expression.clone(),
-            Arc::new(policy_access_control.create_incoming()),
-            Arc::new(policy_access_control.create_outgoing(context).await?),
             tls,
+        );
+        let interceptor_address = Address::from_string(KAFKA_OUTLET_INTERCEPTOR_ADDRESS);
+
+        PortalOutletInterceptor::create(
+            context,
+            interceptor_address.clone(),
+            Some(spawner_flow_control_id.clone()),
+            Arc::new(KafkaOutletInterceptorFactory::new(
+                outlet_controller.clone(),
+                spawner_flow_control_id.clone(),
+            )),
+            Arc::new(policy_access_control.create_outgoing(context)?),
+            Arc::new(policy_access_control.create_incoming()),
+            read_portal_payload_length(),
+        )?;
+
+        // every secure channel can reach this service
+        let flow_controls = context.flow_controls();
+        flow_controls.add_consumer(
+            &interceptor_address,
+            &default_secure_channel_listener_flow_control_id,
+        );
+
+        // this spawner flow control id is used to control communication with dynamically created
+        // outlets
+        flow_controls.add_spawner(&interceptor_address, &spawner_flow_control_id);
+
+        // allow communication with the kafka bootstrap outlet
+        flow_controls.add_consumer(
+            &KAFKA_OUTLET_BOOTSTRAP_ADDRESS.into(),
+            &spawner_flow_control_id,
+        );
+
+        self.create_outlet(
+            context,
+            bootstrap_server_addr,
+            tls,
+            Some(KAFKA_OUTLET_BOOTSTRAP_ADDRESS.into()),
+            false,
+            OutletAccessControl::WithPolicyExpression(outlet_policy_expression),
+            false,
+            false,
+            false,
         )
         .await?;
 
-        if let Err(e) = self
-            .create_outlet(
-                context,
-                HostnamePort::from_str(&bootstrap_server_addr)?,
-                tls,
-                Some(KAFKA_OUTLET_BOOTSTRAP_ADDRESS.into()),
-                false,
-                OutletAccessControl::WithPolicyExpression(outlet_policy_expression),
-            )
-            .await
-        {
-            return Err(ApiError::core(e.to_string()));
-        };
-
-        {
-            self.registry
-                .kafka_services
-                .insert(
-                    service_address,
-                    KafkaServiceInfo::new(KafkaServiceKind::Outlet),
-                )
-                .await;
-        }
+        self.registry.kafka_services.insert(
+            service_address,
+            KafkaServiceInfo::new(KafkaServiceKind::Outlet),
+        );
 
         Ok(())
     }
@@ -319,20 +348,20 @@ impl InMemoryNode {
         kind: KafkaServiceKind,
     ) -> Result<DeleteKafkaServiceResult> {
         debug!(address = %address, kind = %kind, "Deleting kafka service");
-        match self.registry.kafka_services.get(&address).await {
+        match self.registry.kafka_services.get(&address) {
             None => Ok(DeleteKafkaServiceResult::ServiceNotFound { address, kind }),
             Some(e) => {
                 if kind.eq(e.kind()) {
                     match e.kind() {
                         KafkaServiceKind::Inlet => {
-                            ctx.stop_worker(address.clone()).await?;
+                            ctx.stop_address(&address)?;
                         }
                         KafkaServiceKind::Outlet => {
-                            ctx.stop_worker(KAFKA_OUTLET_INTERCEPTOR_ADDRESS).await?;
-                            ctx.stop_worker(KAFKA_OUTLET_BOOTSTRAP_ADDRESS).await?;
+                            ctx.stop_address(&KAFKA_OUTLET_INTERCEPTOR_ADDRESS.into())?;
+                            ctx.stop_address(&KAFKA_OUTLET_BOOTSTRAP_ADDRESS.into())?;
                         }
                     }
-                    self.registry.kafka_services.remove(&address).await;
+                    self.registry.kafka_services.remove(&address);
                     Ok(DeleteKafkaServiceResult::ServiceDeleted)
                 } else {
                     error!(address = %address, "Service is not a kafka {}", kind.to_string());

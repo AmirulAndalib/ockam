@@ -1,6 +1,6 @@
 [package]
 name = "ockam_transport_uds"
-version = "0.46.0"
+version = "0.64.0"
 authors = ["Ockam Developers"]
 categories = [
   "cryptography",
@@ -16,7 +16,7 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/build-trust/ockam/implementations/rust/ockam/ockam_transport_uds"
-rust-version = "1.64.0"
+rust-version = "1.70.0"
 description = """
 Unix Domain Socket (UDS) Transport for the Ockam Routing Protocol
 """
@@ -27,13 +27,13 @@ std = ["ockam_macros/std"]
 alloc = []
 
 [dependencies]
-ockam_core = { path = "../ockam_core", version = "^0.111.0" }
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0" }
-ockam_node = { path = "../ockam_node", version = "^0.119.0" }
-ockam_transport_core = { path = "../ockam_transport_core", version = "^0.84.0" }
+ockam_core = { path = "../ockam_core", version = "^0.124.0" }
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0" }
+ockam_node = { path = "../ockam_node", version = "^0.137.0" }
+ockam_transport_core = { path = "../ockam_transport_core", version = "^0.101.0" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 socket2 = "0.5.6"
-tokio = { version = "1.38", features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-util"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "sync", "net", "macros", "time", "io-util"] }
 tracing = "0.1"
 
 [package.metadata.cargo-machete]

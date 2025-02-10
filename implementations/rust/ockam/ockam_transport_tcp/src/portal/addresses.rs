@@ -1,18 +1,36 @@
+use core::fmt::Display;
 use ockam_core::Address;
 
 /// Enumerate all portal types
 #[derive(Debug, Eq, PartialEq, Clone)]
-pub(super) enum PortalType {
+pub(crate) enum PortalType {
     Inlet,
     Outlet,
+    #[allow(unused)]
+    PrivilegedInlet,
+    #[allow(unused)]
+    PrivilegedOutlet,
 }
 
 impl PortalType {
     pub fn str(&self) -> &'static str {
         match self {
-            PortalType::Inlet => "inlet",
-            PortalType::Outlet => "outlet",
+            PortalType::Inlet | PortalType::PrivilegedInlet => "inlet",
+            PortalType::Outlet | PortalType::PrivilegedOutlet => "outlet",
         }
+    }
+
+    pub fn is_privileged(&self) -> bool {
+        match self {
+            PortalType::Inlet | PortalType::Outlet => false,
+            PortalType::PrivilegedInlet | PortalType::PrivilegedOutlet => true,
+        }
+    }
+}
+
+impl Display for PortalType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.str())
     }
 }
 
@@ -29,19 +47,28 @@ pub(crate) struct Addresses {
 }
 
 impl Addresses {
-    pub(super) fn generate(portal_type: PortalType) -> Self {
+    pub(crate) fn generate(portal_type: PortalType) -> Self {
         let type_name = portal_type.str();
-        let sender_internal =
-            Address::random_tagged(&format!("TcpPortalWorker.{}.sender_internal", type_name));
-        let sender_remote =
-            Address::random_tagged(&format!("TcpPortalWorker.{}.sender_remote", type_name));
+        let privileged_str = if portal_type.is_privileged() {
+            "privileged"
+        } else {
+            "non_privileged"
+        };
+        let sender_internal = Address::random_tagged(&format!(
+            "TcpPortalWorker.{}.{}.sender_internal",
+            privileged_str, type_name
+        ));
+        let sender_remote = Address::random_tagged(&format!(
+            "TcpPortalWorker.{}.{}.sender_remote",
+            privileged_str, type_name
+        ));
         let receiver_internal = Address::random_tagged(&format!(
-            "TcpPortalRecvProcessor.{}.receiver_internal",
-            type_name
+            "TcpPortalRecvProcessor.{}.{}.receiver_internal",
+            privileged_str, type_name
         ));
         let receiver_remote = Address::random_tagged(&format!(
-            "TcpPortalRecvProcessor.{}.receiver_remote",
-            type_name
+            "TcpPortalRecvProcessor.{}.{}.receiver_remote",
+            privileged_str, type_name
         ));
 
         Self {

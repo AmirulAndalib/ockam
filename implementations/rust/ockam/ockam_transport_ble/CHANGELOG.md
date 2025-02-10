@@ -4,6 +4,118 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.99.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.98.0 - 2025-01-09
+
+### Added
+
+- Updated dependencies
+
+## 0.97.0 - 2024-12-12
+
+### Added
+
+- Updated dependencies
+
+## 0.96.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.95.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.94.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.93.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.92.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.91.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.90.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.89.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.88.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.87.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.86.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.85.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.84.0 - 2024-07-29
+
+### Added
+
+- Remove sync operations
+- Updated dependencies
+
+## 0.83.0 - 2024-07-03
+
+### Added
+
+- Display a malformed transport address
+- Updated dependencies
+
+## 0.82.0 - 2024-07-01
+
+### Added
+
+- Updated dependencies
+
 ## 0.81.0 - 2024-06-25
 
 ### Added

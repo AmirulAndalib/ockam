@@ -13,7 +13,7 @@ impl Worker for RemoteRelay {
     type Message = Any;
 
     async fn initialize(&mut self, ctx: &mut Self::Context) -> Result<()> {
-        debug!("RemoteRelay registration...");
+        debug!(registration_route = %self.registration_route, "RemoteRelay initializing...");
 
         ctx.send_from_address(
             self.registration_route.clone(),
@@ -21,6 +21,8 @@ impl Worker for RemoteRelay {
             self.addresses.main_remote.clone(),
         )
         .await?;
+
+        debug!(registration_route = %self.registration_route, "RemoteRelay initialized");
 
         Ok(())
     }
@@ -30,18 +32,7 @@ impl Worker for RemoteRelay {
         ctx: &mut Context,
         msg: Routed<Self::Message>,
     ) -> Result<()> {
-        if msg.msg_addr() == self.addresses.heartbeat {
-            // Heartbeat message, send registration message
-            ctx.send_from_address(
-                self.registration_route.clone(),
-                self.registration_payload.clone(),
-                self.addresses.main_remote.clone(),
-            )
-            .await?;
-
-            Ok(())
-        } else if msg.msg_addr() == self.addresses.main_remote {
-            let return_route = msg.return_route();
+        if msg.msg_addr() == &self.addresses.main_remote {
             let mut local_message = msg.into_local_message();
 
             // Remove my address from the onward_route
@@ -49,29 +40,33 @@ impl Worker for RemoteRelay {
 
             match local_message.onward_route().next() {
                 Err(_) => {
-                    debug!("RemoteRelay received service message");
+                    debug!(registration_route = %self.registration_route, "RemoteRelay received service message");
 
-                    let payload = String::decode(local_message.payload_ref())
-                        .map_err(|_| OckamError::InvalidHubResponse)?;
+                    let payload = String::decode(local_message.payload())
+                        .map_err(|_| OckamError::InvalidResponseFromRelayService)?;
                     // using ends_with() instead of == to allow for prefixes
                     if self.registration_payload != "register"
                         && !payload.ends_with(&self.registration_payload)
                     {
-                        return Err(OckamError::InvalidHubResponse)?;
+                        return Err(OckamError::InvalidResponseFromRelayService)?;
                     }
 
                     if !self.completion_msg_sent {
-                        info!("RemoteRelay registered with route: {}", return_route);
-                        let address = match return_route.recipient()?.to_string().strip_prefix("0#")
+                        info!(registration_route = %self.registration_route, "RemoteRelay registered with route: {}", local_message.return_route);
+                        let address = match local_message
+                            .return_route
+                            .recipient()?
+                            .to_string()
+                            .strip_prefix("0#")
                         {
                             Some(addr) => addr.to_string(),
-                            None => return Err(OckamError::InvalidHubResponse)?,
+                            None => return Err(OckamError::InvalidResponseFromRelayService)?,
                         };
 
                         ctx.send_from_address(
                             self.addresses.completion_callback.clone(),
                             RemoteRelayInfo::new(
-                                return_route,
+                                local_message.return_route,
                                 address,
                                 self.addresses.main_remote.clone(),
                                 self.flow_control_id.clone(),
@@ -93,7 +88,7 @@ impl Worker for RemoteRelay {
                 }
                 Ok(_) => {
                     // Forwarding the message
-                    debug!("RemoteRelay received payload message");
+                    debug!(registration_route = %self.registration_route, "RemoteRelay received payload message");
 
                     // Send the message on its onward_route
                     ctx.forward_from_address(local_message, self.addresses.main_internal.clone())

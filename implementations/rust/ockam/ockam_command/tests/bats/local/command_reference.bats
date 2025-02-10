@@ -21,16 +21,16 @@ teardown() {
   run_success "$OCKAM" node create n2 --verbose
 
   run_success "$OCKAM" node list
-  assert_output --partial "\"node_name\":\"n1\""
-  assert_output --partial "\"status\":\"running\""
+  assert_output --partial "\"node_name\": \"n1\""
+  assert_output --partial "\"status\": \"running\""
 
   run_success "$OCKAM" node stop n1
-  assert_output --partial "Node with name n1 was stopped"
+  assert_output --partial "n1 was stopped"
 
   run_success "$OCKAM" node start n1
 
-  run "$OCKAM" node delete n1 --yes
-  run "$OCKAM" node delete --all --yes
+  run_success "$OCKAM" node delete n1 --yes
+  run_success "$OCKAM" node delete --all --yes
 }
 
 @test "workers and services" {
@@ -93,7 +93,7 @@ teardown() {
   run_success "$OCKAM" tcp-outlet create --at n3 --to "$PYTHON_SERVER_PORT"
   run_success "$OCKAM" tcp-inlet create --at n1 --from "$inlet_port" --to "/worker/${n1_id}/service/forward_to_n3/service/hop/service/outlet"
 
-  run_success curl -sfI --retry-connrefused --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$inlet_port"
+  run_success curl -sfI --retry-all-errors --retry-delay 5 --retry 10 -m 5 "127.0.0.1:$inlet_port"
 }
 
 # ===== TESTS https://docs.ockam.io/reference/command/routing

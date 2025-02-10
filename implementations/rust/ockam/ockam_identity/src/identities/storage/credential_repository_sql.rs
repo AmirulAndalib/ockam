@@ -1,14 +1,16 @@
-use sqlx::database::HasArguments;
 use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
 use sqlx::*;
+use sqlx_core::any::AnyArgumentBuffer;
+use std::sync::Arc;
 use tracing::debug;
-
-use ockam_core::async_trait;
-use ockam_core::Result;
-use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
 
 use crate::models::{CredentialAndPurposeKey, Identifier};
 use crate::{CredentialRepository, TimestampInSeconds};
+use ockam_core::async_trait;
+use ockam_core::Result;
+use ockam_node::database::AutoRetry;
+use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
 
 /// Implementation of `CredentialRepository` trait based on an underlying database
 /// using sqlx as its API, and Sqlite as its driver
@@ -25,6 +27,18 @@ impl CredentialSqlxDatabase {
         Self {
             database,
             node_name: node_name.to_string(),
+        }
+    }
+
+    /// Create a repository
+    pub fn make_repository(
+        database: SqlxDatabase,
+        node_name: &str,
+    ) -> Arc<dyn CredentialRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database, node_name)))
+        } else {
+            Arc::new(Self::new(database, node_name))
         }
     }
 
@@ -121,7 +135,7 @@ impl Type<Any> for CredentialAndPurposeKey {
 }
 
 impl Encode<'_, Any> for CredentialAndPurposeKey {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <Vec<u8> as Encode<'_, Any>>::encode_by_ref(&self.encode_as_cbor_bytes().unwrap(), buf)
     }
 }
@@ -133,7 +147,7 @@ impl Type<Any> for TimestampInSeconds {
 }
 
 impl Encode<'_, Any> for TimestampInSeconds {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <i64 as Encode<'_, Any>>::encode_by_ref(&(self.0 as i64), buf)
     }
 }

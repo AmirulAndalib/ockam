@@ -8,13 +8,12 @@ use tokio_retry::strategy::FixedInterval;
 use tokio_retry::Retry;
 use tracing::debug;
 
-use ockam_api::cloud::project::{Project, ProjectsOrchestratorApi};
-use ockam_api::cloud::{CredentialsEnabled, ORCHESTRATOR_AWAIT_TIMEOUT};
 use ockam_api::config::lookup::LookupMeta;
-use ockam_api::error::ApiError;
 use ockam_api::nodes::service::relay::SecureChannelsCreation;
 use ockam_api::nodes::InMemoryNode;
-use ockam_api::route_to_multiaddr;
+use ockam_api::orchestrator::project::{Project, ProjectsOrchestratorApi};
+use ockam_api::orchestrator::{CredentialsEnabled, ORCHESTRATOR_AWAIT_TIMEOUT};
+use ockam_api::ReverseLocalConverter;
 use ockam_core::route;
 use ockam_multiaddr::{MultiAddr, Protocol};
 use ockam_node::Context;
@@ -59,9 +58,8 @@ pub async fn get_projects_secure_channels_from_config_lookup(
 
     // Create a secure channel for each project.
     for name in meta.project.iter() {
-        // Get the project node's access route + identity id from the config
+        // Get the project node's access route + identifier from the config
         let (project_access_route, project_identifier) = {
-            // This shouldn't fail, as we did a refresh above if we found any missing project.
             let project = opts
                 .state
                 .projects()
@@ -70,7 +68,9 @@ pub async fn get_projects_secure_channels_from_config_lookup(
                 .context(format!("Failed to get project {name}"))?;
             (
                 project.project_multiaddr()?.clone(),
-                project.project_identifier()?,
+                project
+                    .project_identifier()
+                    .ok_or(miette!("The project has no identifier"))?,
             )
         };
 
@@ -85,8 +85,7 @@ pub async fn get_projects_secure_channels_from_config_lookup(
                 timeout,
             )
             .await?;
-        let address = route_to_multiaddr(&route![secure_channel.to_string()])
-            .ok_or_else(|| ApiError::core(format!("Invalid route: {}", secure_channel)))?;
+        let address = ReverseLocalConverter::convert_route(&route![secure_channel.to_string()])?;
         debug!("secure channel created at {address}");
         sc.push(address);
     }
@@ -103,11 +102,11 @@ pub async fn check_project_readiness(
     node: &InMemoryNode,
     project: Project,
 ) -> Result<Project> {
-    // Total of 10 Mins sleep strategy with 5 second intervals between each retry
+    // Total of 20 Mins sleep strategy with 5 second intervals between each retry
     let retry_strategy = FixedInterval::from_millis(5000)
         .take((ORCHESTRATOR_AWAIT_TIMEOUT.as_millis() / 5000) as usize);
 
-    let pb = opts.terminal.progress_bar();
+    let pb = opts.terminal.spinner();
     let project =
         check_project_ready(ctx, node, project, retry_strategy.clone(), pb.clone()).await?;
     let project =
@@ -162,7 +161,9 @@ async fn check_project_node_accessible(
     spinner_option: Option<ProgressBar>,
 ) -> Result<Project> {
     let project_route = project.project_multiaddr()?;
-    let project_identifier = project.project_identifier()?;
+    let project_identifier = project
+        .project_identifier()
+        .ok_or(miette!("The project has no identifier"))?;
     let project_node = node
         .create_project_client(
             &project_identifier,
@@ -212,7 +213,9 @@ async fn check_authority_node_accessible(
     retry_strategy: Take<FixedInterval>,
     spinner_option: Option<ProgressBar>,
 ) -> Result<Project> {
-    let authority_node = node.create_authority_client(&project, None).await?;
+    let authority_node = node
+        .create_authority_client_with_project(ctx, &project, None)
+        .await?;
 
     if let Some(spinner) = spinner_option.as_ref() {
         spinner.set_message("Establishing secure channel to project authority...");

@@ -5,7 +5,7 @@ defmodule Ockam.Transport.TCP.Handler do
 
   alias Ockam.Message
   alias Ockam.Telemetry
-  alias Ockam.Transport.TCP
+  alias Ockam.Transport.TCP.TransportMessage
 
   require Logger
 
@@ -28,41 +28,65 @@ defmodule Ockam.Transport.TCP.Handler do
 
     {:ok, socket} = :ranch.handshake(ref, ranch_options)
 
-    :ok =
-      :inet.setopts(socket, [
-        {:active, @active},
-        {:send_timeout, @send_timeout},
-        {:packet, 2},
-        {:nodelay, true}
-      ])
+    # Header, protocol version "1" must be the first thing exchanged.
+    # It isn't send anymore after the initial exchange.
+    transport.send(socket, <<1>>)
 
-    {:ok, address} = Ockam.Node.register_random_address(@address_prefix, __MODULE__)
+    case transport.recv(socket, 1, 5000) do
+      {:ok, <<1>>} ->
+        :ok =
+          :inet.setopts(socket, [
+            {:active, @active},
+            {:send_timeout, @send_timeout},
+            {:packet, 4},
+            {:nodelay, true}
+          ])
 
-    {function_name, _} = __ENV__.function
-    Telemetry.emit_event(function_name)
+        {:ok, address} = Ockam.Node.register_random_address(@address_prefix, __MODULE__)
 
-    authorization = Keyword.get(handler_options, :authorization, [])
-    tcp_wrapper = Keyword.get(handler_options, :tcp_wrapper, Ockam.Transport.TCP.DefaultWrapper)
+        {function_name, _} = __ENV__.function
+        Telemetry.emit_event(function_name)
 
-    # There are cases where we want to detect and close tcp connections after a long
-    # period without activity.  Mainly to handle the case of a server receiving connections
-    # from a long running client that "leak" them without closing.
-    idle_timeout = Keyword.get(handler_options, :idle_timeout, :infinity)
+        authorization = Keyword.get(handler_options, :authorization, [])
 
-    :gen_server.enter_loop(
-      __MODULE__,
-      [],
-      %{
-        socket: socket,
-        transport: transport,
-        address: address,
-        authorization: authorization,
-        tcp_wrapper: tcp_wrapper,
-        idle_timeout: idle_timeout
-      },
-      {:via, Ockam.Node.process_registry(), address},
-      idle_timeout
-    )
+        tcp_wrapper =
+          Keyword.get(handler_options, :tcp_wrapper, Ockam.Transport.TCP.DefaultWrapper)
+
+        # There are cases where we want to detect and close tcp connections after a long
+        # period without activity.  Mainly to handle the case of a server receiving connections
+        # from a long running client that "leak" them without closing.
+        idle_timeout = Keyword.get(handler_options, :idle_timeout, :infinity)
+
+        :gen_server.enter_loop(
+          __MODULE__,
+          [],
+          %{
+            socket: socket,
+            transport: transport,
+            address: address,
+            authorization: authorization,
+            tcp_wrapper: tcp_wrapper,
+            idle_timeout: idle_timeout
+          },
+          {:via, Ockam.Node.process_registry(), address},
+          idle_timeout
+        )
+
+      {:ok, other} ->
+        Logger.warning("Unrecongnized connection header received: #{other}")
+        {:stop, :normal}
+
+      {:error, :closed} ->
+        Logger.debug(
+          "Connection closed by peer or otherwise lost, before receiving ockam connection header"
+        )
+
+        {:stop, :normal}
+
+      {:error, other} ->
+        # will be logged by the gen_server failing.
+        {:stop, other}
+    end
   end
 
   @impl true
@@ -91,7 +115,7 @@ defmodule Ockam.Transport.TCP.Handler do
       metadata: %{address: address}
     )
 
-    case Ockam.Wire.decode(data, :tcp) do
+    case TransportMessage.decode(data) do
       {:ok, decoded} ->
         forwarded_message =
           decoded
@@ -99,14 +123,13 @@ defmodule Ockam.Transport.TCP.Handler do
 
         send_to_router(forwarded_message)
         Telemetry.emit_event(function_name, metadata: %{name: "decoded_data"})
+        {:noreply, state, idle_timeout}
 
-      {:error, %Ockam.Wire.DecodeError{} = e} ->
+      {:error, e} ->
         start_time = Telemetry.emit_start_event(function_name)
         Telemetry.emit_exception_event(function_name, start_time, e)
-        raise e
+        {:stop, {:error, e}, state}
     end
-
-    {:noreply, state, idle_timeout}
   end
 
   def handle_info({:tcp_closed, socket}, %{socket: socket, transport: transport} = state) do
@@ -165,23 +188,8 @@ defmodule Ockam.Transport.TCP.Handler do
        ) do
     forwarded_message = Message.forward(message)
 
-    case Ockam.Wire.encode(forwarded_message) do
-      {:ok, encoded} ->
-        ## TODO: send/receive message in multiple TCP packets
-        case byte_size(encoded) <= TCP.packed_size_limit() do
-          true ->
-            tcp_wrapper.wrap_tcp_call(transport, :send, [socket, encoded])
-
-          false ->
-            Logger.error("Message to big for TCP: #{inspect(message)}")
-            raise {:message_too_big, message}
-        end
-
-      a ->
-        Logger.error("TCP transport send error #{inspect(a)}")
-        raise a
-    end
-
+    {:ok, encoded} = TransportMessage.encode(forwarded_message)
+    :ok = tcp_wrapper.wrap_tcp_call(transport, :send, [socket, encoded])
     {:ok, state}
   end
 

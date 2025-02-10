@@ -2,10 +2,9 @@ use clap::builder::NonEmptyStringValueParser;
 use clap::Args;
 
 use ockam::Context;
-use ockam_api::cloud::addon::Addons;
 use ockam_api::nodes::InMemoryNode;
+use ockam_api::orchestrator::addon::Addons;
 
-use crate::util::async_cmd;
 use crate::CommandGlobalOpts;
 
 /// List available addons for a project
@@ -22,17 +21,11 @@ pub struct AddonListSubcommand {
 }
 
 impl AddonListSubcommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "project addon list".into()
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         let project_name = self.project_name.clone();
         let project_id = opts
             .state

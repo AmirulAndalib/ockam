@@ -8,7 +8,6 @@ mod encryptor_worker;
 pub(crate) mod handshake;
 mod key_tracker;
 mod listener;
-mod local_info;
 mod message;
 mod nonce;
 mod nonce_tracker;
@@ -26,7 +25,6 @@ pub(crate) use decryptor::*;
 pub(crate) use encryptor_worker::*;
 pub(crate) use handshake::*;
 pub(crate) use listener::*;
-pub use local_info::*;
 pub use message::*;
 pub use nonce::*;
 pub use options::*;
@@ -49,9 +47,17 @@ mod tests {
 
         for n in 0..100 {
             let msg = vec![n];
-            let mut ciphertext = Vec::new();
-            encryptor.encrypt(&mut ciphertext, &msg).await.unwrap();
-            assert_eq!(msg, decryptor.decrypt(&ciphertext).await.unwrap().0);
+            let mut ciphertext = vec![0u8; 1 + 24];
+            ciphertext[8..9].copy_from_slice(msg.as_slice());
+            encryptor.encrypt(&mut ciphertext).await.unwrap();
+            assert_eq!(
+                msg,
+                decryptor
+                    .decrypt(ciphertext.as_mut_slice())
+                    .await
+                    .unwrap()
+                    .0
+            );
         }
     }
 
@@ -61,12 +67,20 @@ mod tests {
 
         for n in 0..100 {
             let msg = vec![n];
-            let mut ciphertext = Vec::new();
-            encryptor.encrypt(&mut ciphertext, &msg).await.unwrap();
+            let mut ciphertext = vec![0u8; 1 + 24];
+            ciphertext[8..9].copy_from_slice(msg.as_slice());
+            encryptor.encrypt(&mut ciphertext).await.unwrap();
             if n % 3 == 0 {
                 // Two out of three packets are lost, but the ones that do reach the decryptor are
                 // decrypted ok.
-                assert_eq!(msg, decryptor.decrypt(&ciphertext).await.unwrap().0);
+                assert_eq!(
+                    msg,
+                    decryptor
+                        .decrypt(ciphertext.as_mut_slice())
+                        .await
+                        .unwrap()
+                        .0
+                );
             }
         }
     }
@@ -81,8 +95,9 @@ mod tests {
             let mut batch: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
             for m in 0..30 {
                 let msg = vec![n, m];
-                let mut ciphertext = Vec::new();
-                encryptor.encrypt(&mut ciphertext, &msg).await.unwrap();
+                let mut ciphertext = vec![0u8; 2 + 24];
+                ciphertext[8..10].copy_from_slice(msg.as_slice());
+                encryptor.encrypt(&mut ciphertext).await.unwrap();
                 batch.push((msg, ciphertext));
             }
             batch.shuffle(&mut thread_rng());
@@ -92,17 +107,35 @@ mod tests {
         // Displaced up to 8 from the expected order, it is in the accepted window so all
         // must be decrypted ok.
         for (plaintext, ciphertext) in all_msgs.iter() {
-            assert_eq!(plaintext, &decryptor.decrypt(ciphertext).await.unwrap().0);
+            assert_eq!(
+                plaintext,
+                &decryptor
+                    .decrypt(ciphertext.clone().as_mut_slice())
+                    .await
+                    .unwrap()
+                    .0
+            );
         }
         // Repeated nonces are detected
         for (_plaintext, ciphertext) in all_msgs.iter() {
-            assert!(decryptor.decrypt(ciphertext).await.is_err());
+            assert!(decryptor
+                .decrypt(ciphertext.clone().as_mut_slice())
+                .await
+                .is_err());
         }
         let msg = vec![1, 1];
-        let mut ciphertext = Vec::new();
-        encryptor.encrypt(&mut ciphertext, &msg).await.unwrap();
+        let mut ciphertext = vec![0u8; 2 + 24];
+        ciphertext[8..10].copy_from_slice(msg.as_slice());
+        encryptor.encrypt(&mut ciphertext).await.unwrap();
         // Good messages continue to be decrypted ok
-        assert_eq!(msg, decryptor.decrypt(&ciphertext).await.unwrap().0);
+        assert_eq!(
+            msg,
+            decryptor
+                .decrypt(ciphertext.clone().as_mut_slice())
+                .await
+                .unwrap()
+                .0
+        );
     }
 
     #[tokio::test]
@@ -110,8 +143,9 @@ mod tests {
         let (mut encryptor, mut decryptor) = create_encryptor_decryptor().await.unwrap();
         for n in 0..100 {
             let msg = vec![n];
-            let mut ciphertext = Vec::new();
-            encryptor.encrypt(&mut ciphertext, &msg).await.unwrap();
+            let mut ciphertext = vec![0u8; 1 + 24];
+            ciphertext[8..9].copy_from_slice(msg.as_slice());
+            encryptor.encrypt(&mut ciphertext).await.unwrap();
             let mut trash_packet = ciphertext.clone();
             // toggle a bit, to make the packet invalid.  The nonce is not affected
             // as it at the beginning of the packet
@@ -124,11 +158,24 @@ mod tests {
             bad_nonce_msg.extend_from_slice(&bad_nonce.to_be_bytes());
             bad_nonce_msg.extend_from_slice(&ciphertext[8..]);
 
-            assert!(decryptor.decrypt(&trash_packet).await.is_err());
-            assert!(decryptor.decrypt(&bad_nonce_msg).await.is_err());
+            assert!(decryptor
+                .decrypt(trash_packet.clone().as_mut_slice())
+                .await
+                .is_err());
+            assert!(decryptor
+                .decrypt(bad_nonce_msg.clone().as_mut_slice())
+                .await
+                .is_err());
             // These invalid packets don't affect the decryptor state
             // FIXME: fix the implementation so this test pass.
-            assert_eq!(msg, decryptor.decrypt(&ciphertext).await.unwrap().0);
+            assert_eq!(
+                msg,
+                decryptor
+                    .decrypt(ciphertext.clone().as_mut_slice())
+                    .await
+                    .unwrap()
+                    .0
+            );
         }
     }
 

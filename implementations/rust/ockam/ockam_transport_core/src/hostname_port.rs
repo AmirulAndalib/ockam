@@ -1,38 +1,59 @@
+use crate::parse_socket_addr;
 use core::fmt::{Display, Formatter};
+use core::net::IpAddr;
 use core::net::SocketAddr;
 use core::str::FromStr;
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 use ockam_core::compat::format;
 use ockam_core::compat::string::{String, ToString};
 use ockam_core::errcode::{Kind, Origin};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+#[cfg(feature = "std")]
+use url::Url;
+
+/// [`HostnamePort`]'s static counterpart usable for const values.
+pub struct StaticHostnamePort {
+    hostname: &'static str,
+    port: u16,
+}
+
+impl StaticHostnamePort {
+    pub const fn new(hostname: &'static str, port: u16) -> Self {
+        Self { hostname, port }
+    }
+
+    pub const fn localhost(port: u16) -> Self {
+        Self {
+            hostname: "127.0.0.1",
+            port,
+        }
+    }
+}
+
+impl TryFrom<StaticHostnamePort> for HostnamePort {
+    type Error = ockam_core::Error;
+
+    fn try_from(value: StaticHostnamePort) -> ockam_core::Result<Self> {
+        HostnamePort::new(value.hostname, value.port)
+    }
+}
 
 /// Hostname and port
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, CborLen)]
+#[rustfmt::skip]
 pub struct HostnamePort {
-    #[n(0)]
-    hostname: String,
-    #[n(1)]
-    port: u16,
+    #[n(0)] hostname: String,
+    #[n(1)] port: u16,
 }
 
 impl HostnamePort {
     /// Create a new HostnamePort
-    pub fn new(hostname: &str, port: u16) -> HostnamePort {
-        HostnamePort {
-            hostname: hostname.to_string(),
+    pub fn new(hostname: impl Into<String>, port: u16) -> ockam_core::Result<HostnamePort> {
+        let _self = Self {
+            hostname: hostname.into(),
             port,
-        }
-    }
-
-    /// Return a hostname and port from a socket address
-    pub fn from_socket_addr(socket_addr: SocketAddr) -> ockam_core::Result<HostnamePort> {
-        HostnamePort::from_str(&socket_addr.to_string())
-    }
-
-    /// Return a socket address from a hostname and port
-    #[cfg(feature = "std")]
-    pub fn to_socket_addr(&self) -> ockam_core::Result<SocketAddr> {
-        crate::resolve_peer(self.to_string())
+        };
+        Self::validate(&_self.to_string())
     }
 
     /// Return the hostname
@@ -43,6 +64,156 @@ impl HostnamePort {
     /// Return the port
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    #[cfg(feature = "std")]
+    pub fn into_url(self, scheme: &str) -> ockam_core::Result<Url> {
+        Url::parse(&format!("{}://{}:{}", scheme, self.hostname, self.port))
+            .map_err(|_| ockam_core::Error::new(Origin::Api, Kind::Serialization, "invalid url"))
+    }
+
+    fn validate(hostname_port: &str) -> ockam_core::Result<Self> {
+        // Check if the input is an IP address
+        if let Ok(socket) = parse_socket_addr(hostname_port) {
+            return Ok(HostnamePort::from(socket));
+        }
+
+        // Split the input into hostname and port
+        let (hostname, port_str) = match hostname_port.split_once(':') {
+            None => {
+                return Err(ockam_core::Error::new(
+                    Origin::Api,
+                    Kind::Serialization,
+                    "Invalid format. Expected 'hostname:port'".to_string(),
+                ))
+            }
+            Some((hostname, port_str)) => (hostname, port_str),
+        };
+
+        // Validate port
+        let port = port_str.parse::<u16>().map_err(|_| {
+            ockam_core::Error::new(
+                Origin::Api,
+                Kind::Serialization,
+                format!("Invalid port number {port_str}"),
+            )
+        })?;
+
+        // Ensure the hostname is a valid ASCII string
+        if !hostname.is_ascii() {
+            return Err(ockam_core::Error::new(
+                Origin::Api,
+                Kind::Serialization,
+                format!("Hostname must be ascii: {hostname_port}"),
+            ));
+        }
+
+        // Validate hostname
+        if hostname.is_empty() {
+            return Err(ockam_core::Error::new(
+                Origin::Api,
+                Kind::Serialization,
+                format!("Hostname cannot be empty {hostname}"),
+            ));
+        }
+
+        // The total length of the hostname should not exceed 253 characters
+        if hostname.len() > 253 {
+            return Err(ockam_core::Error::new(
+                Origin::Api,
+                Kind::Serialization,
+                format!("Hostname too long {hostname}"),
+            ));
+        }
+
+        // Hostname should not start or end with a hyphen or dot
+        if hostname.starts_with('-')
+            || hostname.ends_with('-')
+            || hostname.starts_with('.')
+            || hostname.ends_with('.')
+        {
+            return Err(ockam_core::Error::new(
+                Origin::Api,
+                Kind::Serialization,
+                format!("Hostname cannot start or end with a hyphen or dot {hostname}"),
+            ));
+        }
+
+        // Check segments of the hostname
+        for segment in hostname.split('.') {
+            // Segment can't be empty (i.e. two dots in a row)
+            if segment.is_empty() {
+                return Err(ockam_core::Error::new(
+                    Origin::Api,
+                    Kind::Serialization,
+                    format!("Hostname segment cannot be empty {hostname}"),
+                ));
+            }
+
+            // Hostname segments (between dots) should be between 1 and 63 characters long
+            if segment.len() > 63 {
+                return Err(ockam_core::Error::new(
+                    Origin::Api,
+                    Kind::Serialization,
+                    format!("Hostname segment too long {hostname}"),
+                ));
+            }
+            // Hostname can contain alphanumeric characters, hyphens (-), dots (.), and underscores (_)
+            if !segment
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(ockam_core::Error::new(
+                    Origin::Api,
+                    Kind::Serialization,
+                    format!("Hostname contains invalid characters {hostname}"),
+                ));
+            }
+        }
+
+        Ok(Self {
+            hostname: hostname.to_string(),
+            port,
+        })
+    }
+
+    pub fn localhost(port: u16) -> Self {
+        Self {
+            hostname: "127.0.0.1".into(),
+            port,
+        }
+    }
+}
+
+impl From<SocketAddr> for HostnamePort {
+    fn from(socket_addr: SocketAddr) -> Self {
+        let ip = match socket_addr.ip() {
+            IpAddr::V4(ip) => ip.to_string(),
+            IpAddr::V6(ip) => format!("[{ip}]"),
+        };
+        Self {
+            hostname: ip,
+            port: socket_addr.port(),
+        }
+    }
+}
+
+impl Serialize for HostnamePort {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for HostnamePort {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        HostnamePort::from_str(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -69,35 +240,21 @@ impl FromStr for HostnamePort {
     fn from_str(hostname_port: &str) -> ockam_core::Result<HostnamePort> {
         // edge case: only the port is given
         if let Ok(port) = hostname_port.parse::<u16>() {
-            return Ok(HostnamePort::new("127.0.0.1", port));
+            return Ok(HostnamePort::localhost(port));
         }
 
-        // otherwise check if brackets are present for an IP v6 address
-        let ip_regex = if hostname_port.contains('[') {
-            // we want to parse an IP v6 address as [hostname]:port where hostname does not contain [ or ]
-            regex::Regex::new(r"(\[[^\[\]].*\]):(\d+)").unwrap()
-        } else {
-            regex::Regex::new(r"^([^:]*):(\d+)$").unwrap()
-        };
-
-        // Attempt to match the regular expression
-        if let Some(captures) = ip_regex.captures(hostname_port) {
-            if let (Some(hostname), Some(port)) = (captures.get(1), captures.get(2)) {
-                if let Ok(port) = port.as_str().parse::<u16>() {
-                    let mut hostname = hostname.as_str().to_string();
-                    if hostname.is_empty() {
-                        hostname = "127.0.0.1".to_string()
-                    };
-                    return Ok(HostnamePort { hostname, port });
-                }
+        if let Some(port_str) = hostname_port.strip_prefix(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                return Ok(HostnamePort::localhost(port));
             }
-        };
+        }
 
-        Err(ockam_core::Error::new(
-            Origin::Api,
-            Kind::Serialization,
-            format!("cannot read the value as hostname:port: {hostname_port}"),
-        ))
+        if let Ok(socket) = parse_socket_addr(hostname_port) {
+            return Ok(HostnamePort::from(socket));
+        }
+
+        // We now know it's not an ip, let's validate if it can be a valid hostname
+        Self::validate(hostname_port)
     }
 }
 
@@ -110,44 +267,103 @@ impl Display for HostnamePort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resolve_peer;
     use core::str::FromStr;
 
     #[test]
-    fn test_hostname_port() -> ockam_core::Result<()> {
-        let actual = HostnamePort::from_str("localhost:80")?;
-        assert_eq!(actual, HostnamePort::new("localhost", 80));
+    fn hostname_port_valid_inputs() -> ockam_core::Result<()> {
+        let valid_cases = vec![
+            ("localhost:80", HostnamePort::new("localhost", 80)?),
+            ("33domain:80", HostnamePort::new("33domain", 80)?),
+            ("127.0.0.1:80", HostnamePort::localhost(80)),
+            ("xn--74h.com:80", HostnamePort::new("xn--74h.com", 80)?),
+            (
+                "sub.xn_74h.com:80",
+                HostnamePort::new("sub.xn_74h.com", 80)?,
+            ),
+            (":80", HostnamePort::localhost(80)),
+            ("80", HostnamePort::localhost(80)),
+            (
+                "[2001:db8:85a3::8a2e:370:7334]:8080",
+                HostnamePort::new("[2001:db8:85a3::8a2e:370:7334]", 8080)?,
+            ),
+            ("[::1]:8080", HostnamePort::new("[::1]", 8080)?),
+            (
+                "[2001:db8:85a3::8a2e:370:7334]:8080",
+                HostnamePort::new("[2001:db8:85a3::8a2e:370:7334]", 8080)?,
+            ),
+        ];
+        for (input, expected) in valid_cases {
+            let actual = HostnamePort::from_str(input).ok().unwrap();
+            assert_eq!(actual, expected);
+        }
 
-        let actual = HostnamePort::from_str("127.0.0.1:80")?;
-        assert_eq!(actual, HostnamePort::new("127.0.0.1", 80));
-
-        // this is malformed address
-        let actual = HostnamePort::from_str("127.0.0.1:80:80").ok();
-        assert_eq!(actual, None);
-
-        let actual = HostnamePort::from_str(":80")?;
-        assert_eq!(actual, HostnamePort::new("127.0.0.1", 80));
-
-        let actual = HostnamePort::from_str("80")?;
-        assert_eq!(actual, HostnamePort::new("127.0.0.1", 80));
-
-        let socket_addr = resolve_peer("76.76.21.21:8080".to_string()).unwrap();
-        let actual = HostnamePort::from_socket_addr(socket_addr).ok();
-        assert_eq!(actual, Some(HostnamePort::new("76.76.21.21", 8080)));
-
-        let actual = HostnamePort::from_str("[2001:db8:85a3::8a2e:370:7334]:8080")?;
-        assert_eq!(
-            actual,
-            HostnamePort::new("[2001:db8:85a3::8a2e:370:7334]", 8080)
-        );
-
-        let socket_addr = SocketAddr::from_str("[2001:db8:85a3::8a2e:370:7334]:8080").unwrap();
-        let actual = HostnamePort::from_socket_addr(socket_addr).ok();
-        assert_eq!(
-            actual,
-            Some(HostnamePort::new("[2001:db8:85a3::8a2e:370:7334]", 8080))
-        );
+        let socket_address_cases = vec![
+            (
+                SocketAddr::from_str("127.0.0.1:8080").unwrap(),
+                HostnamePort::localhost(8080),
+            ),
+            (
+                SocketAddr::from_str("[2001:db8:85a3::8a2e:370:7334]:8080").unwrap(),
+                HostnamePort::new("[2001:db8:85a3::8a2e:370:7334]", 8080)?,
+            ),
+            (
+                SocketAddr::from_str("[::1]:8080").unwrap(),
+                HostnamePort::new("[::1]", 8080)?,
+            ),
+        ];
+        for (input, expected) in socket_address_cases {
+            let actual = HostnamePort::from(input);
+            assert_eq!(actual, expected);
+        }
 
         Ok(())
+    }
+
+    #[test]
+    fn hostname_port_invalid_inputs() {
+        let cases = [
+            "invalid",
+            "localhost:80:80",
+            "192,166,0.1:9999",
+            "-hostname-with-leading-hyphen:80",
+            "hostname-with-trailing-hyphen-:80",
+            ".hostname-with-leading-dot:80",
+            "hostname-with-trailing-dot.:80",
+            "hostname..with..multiple..dots:80",
+            "hostname_with_invalid_characters!@#:80",
+            "hostname_with_ space:80",
+            "hostname_with_backslash\\:80",
+            "hostname_with_slash/:80",
+            "hostname_with_colon::80",
+            "hostname_with_semicolon;:80",
+            "hostname_with_quote\":80",
+            "hostname_with_single_quote':80",
+            "hostname_with_question_mark?:80",
+            "hostname_with_asterisk*:80",
+            "hostname_with_ampersand&:80",
+            "hostname_with_percent%:80",
+            "hostname_with_dollar$:80",
+            "hostname_with_hash#:80",
+            "hostname_with_at@:80",
+            "hostname_with_exclamation!:80",
+            "hostname_with_tilde~:80",
+            "hostname_with_caret^:80",
+            "hostname_with_open_bracket[:80",
+            "hostname_with_close_bracket]:80",
+            "hostname_with_open_brace{:80",
+            "hostname_with_close_brace}:80",
+            "hostname_with_open_parenthesis(:80",
+            "hostname_with_close_parenthesis):80",
+            "hostname_with_plus+:80",
+            "hostname_with_equal=:80",
+            "hostname_with_comma,:80",
+            "hostname_with_less_than<:80",
+            "hostname_with_greater_than>:80",
+        ];
+        for case in cases.iter() {
+            if HostnamePort::from_str(case).is_ok() {
+                panic!("HostnamePort should fail for '{case}'");
+            }
+        }
     }
 }

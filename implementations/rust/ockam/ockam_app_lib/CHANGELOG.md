@@ -4,6 +4,167 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.147.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Update the postgres schema
+- Updated dependencies
+
+### Changed
+
+- Rename cloud module to orchestrator
+
+## 0.146.0 - 2025-01-09
+
+### Added
+
+- Simplify `node create` execution
+- Improvements to portals commands arguments
+- Updated dependencies
+
+### Changed
+
+- Extract `OCKAM_SQLITE_IN_MEMORY` env var usage up to the cli state initialization
+
+## 0.145.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Updated dependencies
+
+### Changed
+
+- Make the auto-retry an implementation detail of repositories
+
+## 0.144.0 - 2024-12-04
+
+### Added
+
+- Updated dependencies
+
+## 0.143.0 - 2024-11-30
+
+### Added
+
+- Updated dependencies
+
+## 0.142.0 - 2024-11-27
+
+### Added
+
+- Add env. variables for auth0
+- Updated dependencies
+
+## 0.141.0 - 2024-11-12
+
+### Added
+
+- `project ticket` show warning when using high values for ticket duration/usage
+- Updated dependencies
+
+## 0.140.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.139.0 - 2024-10-24
+
+### Added
+
+- Add more granular scopes for command logs
+- Allow relay connection failure without failing relay creation
+- Updated dependencies
+
+## 0.138.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.137.0 - 2024-10-21
+
+### Added
+
+- Change behavior of how nodes' processes are stopped
+- Improvements to commands outputs
+- Updated dependencies
+
+## 0.136.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.135.0 - 2024-10-11
+
+### Added
+
+- Compact enrollment ticket encoded format
+- Updated dependencies
+
+## 0.134.0 - 2024-09-23
+
+### Added
+
+- Added `TLS` inlet support
+- Influxdb inlet/outlet that attach authorization token
+- Add reliable `TCP` portals to `ockam_api`&`ockam_command`
+- Improve ux of influxdb portal commands
+- Updated dependencies
+
+## 0.133.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.132.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.131.0 - 2024-08-06
+
+### Added
+
+- Rework `Session`s
+- Updated dependencies
+
+## 0.130.0 - 2024-07-29
+
+### Added
+
+- Wait for the project to be ready before creating an authority client
+- Implicitly resolve outlet addresses during connection
+- Converted socket addresses to hostnames in command
+- Remove sync operations
+- Updated dependencies
+
+## 0.129.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Use a published dependency for the patched sqlx library
+
+## 0.128.0 - 2024-07-01
+
+### Added
+
+- Improve transport imports
+- Integrate `UDP` puncture into `ockam_api`
+- Use the any driver for sqlx to add support for postgres
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
 ## 0.127.0 - 2024-06-25
 
 ### Added

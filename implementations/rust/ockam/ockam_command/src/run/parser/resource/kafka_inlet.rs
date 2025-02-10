@@ -7,7 +7,7 @@ use miette::{miette, Result};
 use ockam_api::colors::color_primary;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct KafkaInlet {
     #[serde(alias = "kafka-inlets", alias = "kafka-inlet")]
     pub kafka_inlet: Option<ResourceNameOrMap>,
@@ -33,7 +33,7 @@ impl KafkaInlet {
     ) -> Result<Vec<CreateCommand>> {
         match self.kafka_inlet {
             Some(c) => {
-                let mut cmds = c.into_commands_with_name_arg(Self::get_subcommand, Some("addr"))?;
+                let mut cmds = c.into_commands(Self::get_subcommand)?;
                 if let Some(node_name) = default_node_name {
                     for cmd in cmds.iter_mut() {
                         if cmd.node_opts.at_node.is_none() {
@@ -51,10 +51,10 @@ impl KafkaInlet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ockam::transport::SchemeHostnamePort;
+
     use ockam_core::env::FromString;
     use ockam_multiaddr::MultiAddr;
-    use std::net::SocketAddr;
-    use std::str::FromStr;
 
     #[test]
     fn kafka_inlet_config() {
@@ -65,6 +65,9 @@ mod tests {
               consumer-relay: /ip4/192.168.1.1/tcp/4000
               publishing-relay: /ip4/192.168.1.2/tcp/4000
               at: node_name
+              encrypted-fields:
+                - one
+                - two
         "#;
         let parsed: KafkaInlet = serde_yaml::from_str(unnamed).unwrap();
         let default_node_name = "n1".to_string();
@@ -74,7 +77,7 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert_eq!(
             cmds[0].from,
-            SocketAddr::from_str("127.0.0.1:9092").unwrap()
+            SchemeHostnamePort::new("tcp", "127.0.0.1", 9092).unwrap()
         );
         assert_eq!(
             &cmds[0].to,
@@ -89,7 +92,12 @@ mod tests {
             &MultiAddr::from_string("/ip4/192.168.1.2/tcp/4000").unwrap(),
         );
         assert_eq!(cmds[0].node_opts.at_node, Some("node_name".to_string()));
-        assert!(!cmds[0].avoid_publishing);
+        assert!(!cmds[0].no_publishing);
+
+        assert_eq!(
+            cmds[0].encrypted_fields,
+            vec!["one".to_string(), "two".to_string()]
+        );
 
         let named = r#"
             kafka-inlet:
@@ -102,12 +110,12 @@ mod tests {
             .into_parsed_commands(Some(&default_node_name))
             .unwrap();
         assert_eq!(cmds.len(), 1);
-        assert_eq!(cmds[0].addr, "ki");
+        assert_eq!(cmds[0].name, "ki");
         assert_eq!(
             cmds[0].consumer.as_ref().unwrap(),
             &MultiAddr::from_string("/dnsaddr/kafka-outlet.local/tcp/5000").unwrap(),
         );
-        assert!(cmds[0].avoid_publishing);
+        assert!(cmds[0].no_publishing);
         assert_eq!(cmds[0].node_opts.at_node, Some(default_node_name.clone()));
 
         let list = r#"
@@ -124,7 +132,7 @@ mod tests {
             cmds[0].consumer.as_ref().unwrap(),
             &MultiAddr::from_string("/dnsaddr/kafka-outlet.local/tcp/5000").unwrap(),
         );
-        assert!(cmds[0].avoid_publishing);
+        assert!(cmds[0].no_publishing);
         assert_eq!(cmds[0].node_opts.at_node, Some(default_node_name));
     }
 }

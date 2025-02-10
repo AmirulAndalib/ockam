@@ -41,15 +41,13 @@ pub struct Config {
     pub relays: Relays,
 }
 
-impl ConfigParser<'_> for Config {}
-
 impl Config {
     /// Executes the commands described in the configuration to create the desired state.
     ///
     /// More specifically, this struct is responsible for:
     /// - Running the commands in a valid order. For example, nodes will be created before TCP inlets.
     /// - Do the necessary checks to run only the necessary commands. For example, an enrollment ticket won't
-    ///  be used if the identity is already enrolled.
+    ///   be used if the identity is already enrolled.
     ///
     /// For more details about the parsing, see the [parser](crate::run::parser) module.
     /// You can also check examples of valid configuration files in the demo folder of this module.
@@ -65,7 +63,7 @@ impl Config {
         Ok(vec![
             self.vaults.into_parsed_commands()?.into(),
             self.identities.into_parsed_commands()?.into(),
-            self.project_enroll.into_parsed_commands()?.into(),
+            self.project_enroll.into_parsed_commands(None)?.into(),
             self.nodes.into_parsed_commands()?.into(),
             self.relays.into_parsed_commands(None)?.into(),
             self.policies.into_parsed_commands()?.into(),
@@ -79,22 +77,25 @@ impl Config {
     pub async fn parse_and_run(
         ctx: &Context,
         opts: CommandGlobalOpts,
-        contents: &str,
+        contents: String,
     ) -> miette::Result<()> {
-        let config = Config::parse(&Config::resolve(contents)?)?;
-        config.run(ctx, &opts).await
+        Self::parse(contents)?.run(ctx, &opts).await
+    }
+
+    pub(crate) fn parse(mut contents: String) -> miette::Result<Self> {
+        ConfigParser::parse(&mut contents)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::path::PathBuf;
-
+    use super::*;
+    use crate::node::config::ENROLLMENT_TICKET;
     use crate::run::parser::building_blocks::*;
     use crate::run::parser::VersionValue;
-
-    use super::*;
+    use serial_test::serial;
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     #[test]
     fn parse_complete_config() {
@@ -149,7 +150,8 @@ mod tests {
             relays:
               - r1
               - r2
-        "#;
+        "#
+        .to_string();
         let parsed = Config::parse(config).unwrap();
 
         let expected = Config {
@@ -169,9 +171,7 @@ mod tests {
                         items: vec![(
                             "i2".to_string(),
                             Args {
-                                args: vec![("vault".to_string(), "v2".into())]
-                                    .into_iter()
-                                    .collect(),
+                                args: vec![("vault".into(), "v2".into())].into_iter().collect(),
                             },
                         )]
                         .into_iter()
@@ -192,24 +192,18 @@ mod tests {
                 policies: Some(UnnamedResources::List(vec![
                     Args {
                         args: vec![
-                            ("at".to_string(), "n1".into()),
-                            ("resource".to_string(), "r1".into()),
-                            (
-                                "expression".to_string(),
-                                "(= subject.component \"c1\")".into(),
-                            ),
+                            ("at".into(), "n1".into()),
+                            ("resource".into(), "r1".into()),
+                            ("expression".into(), "(= subject.component \"c1\")".into()),
                         ]
                         .into_iter()
                         .collect(),
                     },
                     Args {
                         args: vec![
-                            ("at".to_string(), "n2".into()),
-                            ("resource".to_string(), "r2".into()),
-                            (
-                                "expression".to_string(),
-                                "(= subject.component \"c2\")".into(),
-                            ),
+                            ("at".into(), "n2".into()),
+                            ("resource".into(), "r2".into()),
+                            ("expression".into(), "(= subject.component \"c2\")".into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -222,20 +216,15 @@ mod tests {
                         (
                             "to1".to_string(),
                             Args {
-                                args: vec![
-                                    ("to".to_string(), "6060".into()),
-                                    ("at".to_string(), "n".into()),
-                                ]
-                                .into_iter()
-                                .collect(),
+                                args: vec![("to".into(), "6060".into()), ("at".into(), "n".into())]
+                                    .into_iter()
+                                    .collect(),
                             },
                         ),
                         (
                             "to2".to_string(),
                             Args {
-                                args: vec![("to".to_string(), "6061".into())]
-                                    .into_iter()
-                                    .collect(),
+                                args: vec![("to".into(), "6061".into())].into_iter().collect(),
                             },
                         ),
                     ]
@@ -250,8 +239,8 @@ mod tests {
                             "ti1".to_string(),
                             Args {
                                 args: vec![
-                                    ("from".to_string(), "6060".into()),
-                                    ("at".to_string(), "n".into()),
+                                    ("from".into(), "6060".into()),
+                                    ("at".into(), "n".into()),
                                 ]
                                 .into_iter()
                                 .collect(),
@@ -260,9 +249,7 @@ mod tests {
                         (
                             "ti2".to_string(),
                             Args {
-                                args: vec![("from".to_string(), "6061".into())]
-                                    .into_iter()
-                                    .collect(),
+                                args: vec![("from".into(), "6061".into())].into_iter().collect(),
                             },
                         ),
                     ]
@@ -274,10 +261,10 @@ mod tests {
                 kafka_inlet: Some(ResourceNameOrMap::RandomlyNamedMap(
                     UnnamedResources::Single(Args {
                         args: vec![
-                            ("from".to_string(), "9092".into()),
-                            ("at".to_string(), "n".into()),
-                            ("to".to_string(), "/project/project_name".into()),
-                            ("port-range".to_string(), "1000-2000".into()),
+                            ("from".into(), "9092".into()),
+                            ("at".into(), "n".into()),
+                            ("to".into(), "/project/project_name".into()),
+                            ("port-range".into(), "1000-2000".into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -288,8 +275,8 @@ mod tests {
                 kafka_outlet: Some(ResourceNameOrMap::RandomlyNamedMap(
                     UnnamedResources::Single(Args {
                         args: vec![
-                            ("bootstrap-server".to_string(), "192.168.1.1:9092".into()),
-                            ("at".to_string(), "n".into()),
+                            ("bootstrap-server".into(), "192.168.1.1:9092".into()),
+                            ("at".into(), "n".into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -307,21 +294,22 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn resolve_variables() {
         std::env::set_var("SUFFIX", "node");
         let config = r#"
             variables:
               prefix: ockam
-              ticket_path: ./path/to/ticket
+              ENROLLMENT_TICKET: ./path/to/ticket
 
-            ticket: ${ticket_path}
+            ticket: ${ENROLLMENT_TICKET}
 
             nodes:
               - ${prefix}_n1_${SUFFIX}
               - ${prefix}_n2_${SUFFIX}
-        "#;
-        let resolved = Config::resolve(config).unwrap();
-        let parsed = Config::parse(&resolved).unwrap();
+        "#
+        .to_string();
+        let parsed = Config::parse(config).unwrap();
         let expected = Config {
             version: Version {
                 version: VersionValue::latest(),
@@ -348,22 +336,33 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn parse_demo_config_files() {
-        let files = std::fs::read_dir(demo_config_files_dir()).unwrap();
+        let files = std::fs::read_dir(demo_config_files_dir())
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 7);
         for file in files {
+            std::env::set_var(ENROLLMENT_TICKET, "ticket");
             let file = file.unwrap();
             let path = file.path();
             let contents = std::fs::read_to_string(&path).unwrap();
-            let res = Config::parse(&contents);
-            res.unwrap();
+            match Config::parse(contents) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("Error parsing file {path:?}: {e}");
+                    panic!();
+                }
+            }
         }
     }
 
     #[test]
+    #[serial]
     fn parse_demo_config_file_1() {
         let path = demo_config_files_dir().join("1.portal.single-machine.yaml");
-        let config = Config::resolve(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let parsed = Config::parse(&config).unwrap();
+        let config = std::fs::read_to_string(path).unwrap();
+        let parsed = Config::parse(config).unwrap();
         assert_eq!(parsed.version.version, VersionValue::latest());
         assert_eq!(parsed.vaults.vaults, None);
         assert_eq!(parsed.identities.identities, None);
@@ -376,9 +375,7 @@ mod tests {
                 items: vec![(
                     "db-outlet".to_string(),
                     Args {
-                        args: vec![("to".to_string(), "5432".into())]
-                            .into_iter()
-                            .collect(),
+                        args: vec![("to".into(), "5432".into())].into_iter().collect(),
                     },
                 ),]
                 .into_iter()
@@ -391,9 +388,7 @@ mod tests {
                 items: vec![(
                     "web-inlet".to_string(),
                     Args {
-                        args: vec![("from".to_string(), "4000".into())]
-                            .into_iter()
-                            .collect(),
+                        args: vec![("from".into(), "4000".into())].into_iter().collect(),
                     },
                 ),]
                 .into_iter()
@@ -409,10 +404,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn parse_demo_config_file_2_inlet() {
         let path = demo_config_files_dir().join("2.portal.inlet.yaml");
-        let config = Config::resolve(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let parsed = Config::parse(&config).unwrap();
+        let config = std::fs::read_to_string(path).unwrap();
+        let parsed = Config::parse(config).unwrap();
         assert_eq!(parsed.version.version, VersionValue::latest());
         assert_eq!(parsed.vaults.vaults, None);
         assert_eq!(parsed.identities.identities, None);
@@ -435,9 +431,9 @@ mod tests {
                     "web-inlet".to_string(),
                     Args {
                         args: vec![
-                            ("from".to_string(), "4000".into()),
-                            ("via".to_string(), "db".into()),
-                            ("allow".to_string(), "component.db".into()),
+                            ("from".into(), "4000".into()),
+                            ("via".into(), "db".into()),
+                            ("allow".into(), "component.db".into()),
                         ]
                         .into_iter()
                         .collect(),
@@ -451,10 +447,11 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn parse_demo_config_file_2_outlet() {
         let path = demo_config_files_dir().join("2.portal.outlet.yaml");
-        let config = Config::resolve(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let parsed = Config::parse(&config).unwrap();
+        let config = std::fs::read_to_string(path).unwrap();
+        let parsed = Config::parse(config).unwrap();
         assert_eq!(parsed.version.version, VersionValue::latest());
         assert_eq!(parsed.vaults.vaults, None);
         assert_eq!(parsed.identities.identities, None);
@@ -473,8 +470,8 @@ mod tests {
                     "db-outlet".to_string(),
                     Args {
                         args: vec![
-                            ("to".to_string(), "5432".into()),
-                            ("allow".to_string(), "component.web".into()),
+                            ("to".into(), "5432".into()),
+                            ("allow".into(), "component.web".into()),
                         ]
                         .into_iter()
                         .collect(),

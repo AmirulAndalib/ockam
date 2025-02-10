@@ -6,8 +6,7 @@ use miette::IntoDiagnostic;
 use ockam::abac::expr::{eq, ident, str};
 use ockam::abac::PolicyExpression::FullExpression;
 use ockam::abac::SUBJECT_KEY;
-use tracing::{debug, error, info, warn};
-
+use ockam::transport::HostnamePort;
 use ockam_api::address::get_free_address;
 use ockam_api::authenticator::direct::{
     OCKAM_ROLE_ATTRIBUTE_ENROLLER_VALUE, OCKAM_ROLE_ATTRIBUTE_KEY,
@@ -16,11 +15,11 @@ use ockam_api::nodes::service::tcp_inlets::Inlets;
 use ockam_api::ConnectionStatus;
 use ockam_core::api::Reply;
 use ockam_multiaddr::MultiAddr;
+use tracing::{debug, error, info, warn};
 
 use crate::background_node::BackgroundNodeClientTrait;
 use crate::incoming_services::state::{IncomingService, Port};
 use crate::state::AppState;
-use crate::Error;
 
 impl AppState {
     pub(crate) async fn refresh_inlets(&self) -> crate::Result<()> {
@@ -141,25 +140,10 @@ impl AppState {
         let project_name = match self.match_owned_projects(service).await? {
             Some(project_name) => project_name,
             None => {
-                let project_name = service
-                    .enrollment_ticket()
-                    .project
-                    .as_ref()
-                    .map(|x| x.name.clone());
-                let project_name = if let Some(project_name) = project_name {
-                    project_name
-                } else {
-                    error!("Enrollment Ticket doesn't contain Project info");
-                    return Err(Error::App(
-                        "Enrollment Ticket doesn't contain Project info".to_string(),
-                    ));
-                };
+                let project_name = service.enrollment_ticket().project()?.name;
                 background_node_client
                     .projects()
-                    .enroll(
-                        &local_node_name,
-                        &service.enrollment_ticket().hex_encoded()?,
-                    )
+                    .enroll(&local_node_name, service.enrollment_ticket().clone())
                     .await?;
                 // the node name is the project name for enrolled nodes
                 project_name
@@ -215,7 +199,7 @@ impl AppState {
         inlet_node
             .create_inlet(
                 &self.context(),
-                &bind_address.to_string(),
+                &HostnamePort::from(bind_address),
                 &MultiAddr::from_str(&service.service_route(Some(project_name.as_str())))
                     .into_diagnostic()?,
                 &inlet_alias,
@@ -223,6 +207,10 @@ impl AppState {
                 &Some(FullExpression(expr)),
                 Duration::from_secs(5),
                 true,
+                &None,
+                false,
+                false,
+                false,
                 &None,
                 false,
                 false,
@@ -244,19 +232,8 @@ impl AppState {
         &self,
         service: &IncomingService,
     ) -> crate::Result<Option<String>> {
-        let ticket_project = service
-            .enrollment_ticket()
-            .project
-            .as_ref()
-            .ok_or_else(|| {
-                format!(
-                    "The enrollment ticket for the accepted invitation {} should have a project",
-                    service.name()
-                )
-            })?;
-
+        let ticket_project = service.enrollment_ticket().project()?;
         let state = self.state().await;
-
         let user = state.get_default_user().await?;
         if let Some(my_project) = state
             .projects()

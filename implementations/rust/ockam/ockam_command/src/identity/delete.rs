@@ -1,14 +1,12 @@
+use crate::terminal::tui::DeleteCommandTui;
+use crate::tui::PluralTerm;
+use crate::{docs, CommandGlobalOpts};
 use clap::Args;
 use colorful::Colorful;
 use console::Term;
 use ockam_api::colors::color_primary;
 use ockam_api::fmt_ok;
 use ockam_api::terminal::{Terminal, TerminalStream};
-
-use crate::terminal::tui::DeleteCommandTui;
-use crate::tui::PluralTerm;
-use crate::util::async_cmd;
-use crate::{docs, CommandGlobalOpts};
 
 const LONG_ABOUT: &str = include_str!("./static/delete/long_about.txt");
 const AFTER_LONG_HELP: &str = include_str!("./static/delete/after_long_help.txt");
@@ -27,26 +25,21 @@ pub struct DeleteCommand {
     #[arg(display_order = 901, long, short)]
     yes: bool,
 
-    #[arg(long, short)]
+    #[arg(long)]
     all: bool,
 }
 
 impl DeleteCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |_ctx| async move {
-            self.async_run(opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "identity delete".into()
     }
 
-    async fn async_run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
         DeleteTui::run(opts, self.clone()).await
     }
 }
 
+#[derive(Clone)]
 pub struct DeleteTui {
     opts: CommandGlobalOpts,
     cmd: DeleteCommand,

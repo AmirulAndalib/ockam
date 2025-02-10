@@ -1,19 +1,19 @@
-use std::str::FromStr;
-
-use sqlx::any::AnyRow;
-use sqlx::database::HasArguments;
-use sqlx::encode::IsNull;
-use sqlx::*;
-
 use ockam::identity::Identifier;
 use ockam::{FromSqlxError, SqlxDatabase, ToVoid};
 use ockam_core::async_trait;
-
-use ockam_core::Result;
-use ockam_node::database::{Boolean, Nullable};
+use sqlx::any::AnyRow;
+use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
+use sqlx::*;
+use sqlx_core::any::AnyArgumentBuffer;
+use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::cli_state::{NodeInfo, NodesRepository};
 use crate::config::lookup::InternetAddress;
+use ockam_core::Result;
+use ockam_node::database::AutoRetry;
+use ockam_node::database::{Boolean, Nullable};
 
 #[derive(Clone)]
 pub struct NodesSqlxDatabase {
@@ -24,6 +24,15 @@ impl NodesSqlxDatabase {
     pub fn new(database: SqlxDatabase) -> Self {
         debug!("create a repository for nodes");
         Self { database }
+    }
+
+    /// Create a repository
+    pub fn make_repository(database: SqlxDatabase) -> Arc<dyn NodesRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database)))
+        } else {
+            Arc::new(Self::new(database))
+        }
     }
 
     /// Create a new in-memory database
@@ -54,11 +63,15 @@ impl NodesRepository for NodesSqlxDatabase {
             .bind(node_info.pid().map(|p| p as i32))
             .bind(
                 node_info
-                    .http_server_address()
+                    .status_endpoint_address()
                     .as_ref()
                     .map(|a| a.to_string()),
             );
-        Ok(query.execute(&*self.database.pool).await.void()?)
+        query.execute(&*self.database.pool).await.void()?;
+        if node_info.is_default() {
+            self.set_default_node(&node_info.name()).await?;
+        }
+        Ok(())
     }
 
     async fn get_nodes(&self) -> Result<Vec<NodeInfo>> {
@@ -148,9 +161,6 @@ impl NodesRepository for NodesSqlxDatabase {
             sqlx::query("DELETE FROM tcp_outlet_status WHERE node_name = $1").bind(node_name);
         query.execute(&mut *transaction).await.void()?;
 
-        let query = sqlx::query("DELETE FROM node_project WHERE node_name = $1").bind(node_name);
-        query.execute(&mut *transaction).await.void()?;
-
         transaction.commit().await.void()
     }
 
@@ -165,7 +175,7 @@ impl NodesRepository for NodesSqlxDatabase {
         query.execute(&*self.database.pool).await.void()
     }
 
-    async fn set_http_server_address(
+    async fn set_status_endpoint_address(
         &self,
         node_name: &str,
         address: &InternetAddress,
@@ -190,11 +200,14 @@ impl NodesRepository for NodesSqlxDatabase {
             .and_then(|n| n.tcp_listener_address()))
     }
 
-    async fn get_http_server_address(&self, node_name: &str) -> Result<Option<InternetAddress>> {
+    async fn get_status_endpoint_address(
+        &self,
+        node_name: &str,
+    ) -> Result<Option<InternetAddress>> {
         Ok(self
             .get_node(node_name)
             .await?
-            .and_then(|n| n.http_server_address()))
+            .and_then(|n| n.status_endpoint_address()))
     }
 
     async fn set_node_pid(&self, node_name: &str, pid: u32) -> Result<()> {
@@ -205,32 +218,8 @@ impl NodesRepository for NodesSqlxDatabase {
     }
 
     async fn set_no_node_pid(&self, node_name: &str) -> Result<()> {
-        let query = query("UPDATE node SET pid=NULL WHERE name = $1 ").bind(node_name);
+        let query = query("UPDATE node SET pid=NULL WHERE name = $1").bind(node_name);
         query.execute(&*self.database.pool).await.void()
-    }
-
-    async fn set_node_project_name(&self, node_name: &str, project_name: &str) -> Result<()> {
-        let query = query(
-            r#"
-        INSERT INTO node_project (node_name, project_name)
-        VALUES ($1, $2)
-        ON CONFLICT (node_name)
-        DO UPDATE SET project_name = $2"#,
-        )
-        .bind(node_name)
-        .bind(project_name);
-        Ok(query.execute(&*self.database.pool).await.void()?)
-    }
-
-    async fn get_node_project_name(&self, node_name: &str) -> Result<Option<String>> {
-        let query =
-            query("SELECT project_name FROM node_project WHERE node_name = $1").bind(node_name);
-        let row: Option<AnyRow> = query
-            .fetch_optional(&*self.database.pool)
-            .await
-            .into_core()?;
-        let project_name: Option<String> = row.map(|r| r.get(0));
-        Ok(project_name)
     }
 }
 
@@ -243,7 +232,7 @@ impl Type<Any> for InternetAddress {
 }
 
 impl sqlx::Encode<'_, Any> for InternetAddress {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <String as sqlx::Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
     }
 }
@@ -266,7 +255,7 @@ impl NodeRow {
             .tcp_listener_address
             .to_option()
             .and_then(|a| InternetAddress::new(&a));
-        let http_server_address = self
+        let status_endpoint_address = self
             .http_server_address
             .to_option()
             .and_then(|a| InternetAddress::new(&a));
@@ -279,7 +268,7 @@ impl NodeRow {
             self.is_authority.to_bool(),
             tcp_listener_address,
             self.pid.to_option().map(|p| p as u32),
-            http_server_address,
+            status_endpoint_address,
         ))
     }
 }
@@ -336,19 +325,39 @@ mod test {
 
             repository.store_node(&node_info2).await?;
             let result = repository.get_nodes().await?;
-            assert_eq!(result, vec![node_info1.clone(), node_info2.clone()]);
+            assert_eq!(result.len(), 2);
+            assert!(result.contains(&node_info1));
+            assert!(result.contains(&node_info2));
 
             // a node can be set as the default
             repository.set_default_node("node2").await?;
             let result = repository.get_default_node().await?;
             assert_eq!(result, Some(node_info2.set_as_default()));
 
+            // if another node is stored as default, the previous default node is not anymore
+            let node_info3 = NodeInfo::new(
+                "node3".to_string(),
+                identifier.clone(),
+                0,
+                true,
+                false,
+                None,
+                Some(5678),
+                None,
+            );
+            repository.store_node(&node_info3).await?;
+            let result = repository.get_default_node().await?;
+            assert_eq!(result, Some(node_info3.set_as_default()));
+
             // a node can be deleted
             repository.delete_node("node2").await?;
             let result = repository.get_nodes().await?;
-            assert_eq!(result, vec![node_info1.clone()]);
+            assert_eq!(result.len(), 2);
+            assert!(result.contains(&node_info1));
+            assert!(result.contains(&node_info3));
 
-            // in that case there is no more default node
+            // if the default node is deleted, there is no default node anymore
+            repository.delete_node("node3").await?;
             let result = repository.get_default_node().await?;
             assert!(result.is_none());
             Ok(())
@@ -376,24 +385,9 @@ mod test {
 
             // get the nodes for identifier1
             let result = repository.get_nodes_by_identifier(&identifier1).await?;
-            assert_eq!(result, vec![node_info1.clone(), node_info2.clone()]);
-            Ok(())
-        })
-        .await
-    }
-
-    #[tokio::test]
-    async fn test_node_project() -> Result<()> {
-        with_dbs(|db| async move {
-            let repository: Arc<dyn NodesRepository> = Arc::new(NodesSqlxDatabase::new(db));
-
-            // a node can be associated to a project name
-            repository
-                .set_node_project_name("node_name", "project1")
-                .await?;
-            let result = repository.get_node_project_name("node_name").await?;
-            assert_eq!(result, Some("project1".into()));
-
+            assert_eq!(result.len(), 2);
+            assert!(result.contains(&node_info1));
+            assert!(result.contains(&node_info2));
             Ok(())
         })
         .await

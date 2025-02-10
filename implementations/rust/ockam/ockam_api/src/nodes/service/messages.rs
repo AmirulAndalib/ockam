@@ -1,13 +1,12 @@
 use miette::IntoDiagnostic;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::trace;
 
-use minicbor::{Decode, Encode};
+use minicbor::{CborLen, Decode, Encode};
 
 use ockam_core::api::{Error, Request, Response};
-use ockam_core::{self, async_trait, AsyncTryClone, Result};
+use ockam_core::{self, async_trait, Result};
 use ockam_multiaddr::MultiAddr;
 use ockam_node::{Context, MessageSendReceiveOptions};
 
@@ -38,9 +37,8 @@ impl Messages for NodeManager {
         timeout: Option<Duration>,
     ) -> miette::Result<Vec<u8>> {
         let msg_length = message.len();
-        let connection_ctx = Arc::new(ctx.async_try_clone().await.into_diagnostic()?);
         let connection = self
-            .make_connection(connection_ctx, to, self.identifier(), None, timeout)
+            .make_connection(ctx, to, self.identifier(), None, timeout)
             .await
             .into_diagnostic()?;
         let route = connection.route().into_diagnostic()?;
@@ -100,7 +98,7 @@ impl NodeManagerWorker {
     }
 }
 
-#[derive(Encode, Decode, Debug)]
+#[derive(Encode, Decode, CborLen, Debug)]
 #[cfg_attr(test, derive(Clone))]
 #[rustfmt::skip]
 #[cbor(map)]

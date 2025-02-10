@@ -1,19 +1,17 @@
+use crate::cli_state::{random_name, CliState, CliStateError, Result};
+use crate::colors::color_primary;
+use crate::output::Output;
+use crate::{fmt_log, fmt_ok, fmt_warn};
 use colorful::Colorful;
+use ockam::identity::{Identities, Vault};
+use ockam_core::errcode::{Kind, Origin};
+use ockam_node::database::SqlxDatabase;
+use ockam_vault_aws::AwsSigningVault;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use ockam::identity::{Identities, Vault};
-use ockam_core::errcode::{Kind, Origin};
-use ockam_node::database::SqlxDatabase;
-use ockam_vault_aws::AwsSigningVault;
-
-use crate::cli_state::{random_name, CliState, CliStateError, Result};
-use crate::colors::color_primary;
-use crate::output::Output;
-use crate::{fmt_log, fmt_ok};
 
 static DEFAULT_VAULT_NAME: &str = "default";
 
@@ -63,7 +61,7 @@ impl CliState {
                     .store_vault(&vault_name, VaultType::database(use_aws_kms))
                     .await?),
                 Some(_) => {
-                    let path = self.make_vault_path(&vault_name);
+                    let path = self.make_vault_path(&vault_name)?;
                     Ok(self
                         .create_local_vault(vault_name, &path, use_aws_kms)
                         .await?)
@@ -122,9 +120,15 @@ impl CliState {
         let identities_repository = self.identities_repository();
         let identities = identities_repository.get_named_identities().await?;
         for identity in identities {
-            identities_repository
+            if let Err(err) = identities_repository
                 .delete_identity(&identity.name())
-                .await?;
+                .await
+            {
+                self.notify_message(fmt_warn!(
+                    "Failed to delete the identity {}: {err}",
+                    color_primary(identity.name())
+                ));
+            }
         }
         Ok(())
     }
@@ -134,7 +138,12 @@ impl CliState {
     pub async fn delete_all_named_vaults(&self) -> Result<()> {
         let vaults = self.vaults_repository().get_named_vaults().await?;
         for vault in vaults {
-            self.delete_named_vault(&vault.name()).await?;
+            if let Err(err) = self.delete_named_vault(&vault.name()).await {
+                self.notify_message(fmt_warn!(
+                    "Failed to delete the vault {}: {err}",
+                    color_primary(vault.name())
+                ));
+            }
         }
         Ok(())
     }
@@ -197,7 +206,7 @@ impl CliState {
             let vault = self
                 .create_local_vault(
                     vault_name.to_string(),
-                    &self.make_vault_path(vault_name),
+                    &self.make_vault_path(vault_name)?,
                     UseAwsKms::No,
                 )
                 .await?;
@@ -386,8 +395,8 @@ impl CliState {
 
     /// Decide which path to use for a vault path:
     ///   - otherwise return a new path alongside the database $OCKAM_HOME/vault-{vault_name}
-    fn make_vault_path(&self, vault_name: &str) -> PathBuf {
-        self.dir().join(format!("vault-{vault_name}"))
+    fn make_vault_path(&self, vault_name: &str) -> Result<PathBuf> {
+        Ok(self.dir()?.join(format!("vault-{vault_name}")))
     }
 }
 
@@ -547,6 +556,7 @@ mod tests {
     use super::*;
     use ockam::identity::models::{PurposeKeyAttestation, PurposeKeyAttestationSignature};
     use ockam::identity::Purpose;
+    use ockam_node::database::skip_if_postgres;
     use ockam_vault::{
         ECDSASHA256CurveP256SecretKey, ECDSASHA256CurveP256Signature, HandleToSecret,
         SigningSecret, SigningSecretKeyHandle, X25519SecretKey, X25519SecretKeyHandle,
@@ -673,7 +683,7 @@ mod tests {
 
         // try to move it. That should fail because the first vault is
         // stored in the main database
-        let new_vault_path = cli.dir().join("new-vault-name");
+        let new_vault_path = cli.dir()?.join("new-vault-name");
         let result = cli.move_vault("vault1", &new_vault_path).await;
         assert!(result.is_err());
 
@@ -682,7 +692,7 @@ mod tests {
 
         // try to move it. This should succeed
         let result = cli
-            .move_vault("vault2", &cli.dir().join("new-vault-name"))
+            .move_vault("vault2", &cli.dir()?.join("new-vault-name"))
             .await;
         if let Err(e) = result {
             panic!("{}", e.to_string())
@@ -722,14 +732,24 @@ mod tests {
         assert!(result.path_as_string().unwrap().contains("vault-secrets"));
 
         // if we reset, we can check that the first vault gets the user defined name
-        // instead of default
-        cli.reset().await?;
-        let cli = CliState::test().await?;
-        let result = cli
-            .create_named_vault(Some("secrets".to_string()), None, UseAwsKms::No)
-            .await?;
-        assert_eq!(result.name(), "secrets".to_string());
-        assert_eq!(result.vault_type(), VaultType::database(UseAwsKms::No));
+        // instead of default.
+        // We only test this for sqlite since we can't reset with postgres.
+
+        skip_if_postgres(move || {
+            let cli_clone = cli.clone();
+            async move {
+                cli_clone.reset().await?;
+                let cli = CliState::test().await?;
+                let result = cli
+                    .create_named_vault(Some("secrets".to_string()), None, UseAwsKms::No)
+                    .await?;
+                assert_eq!(result.name(), "secrets".to_string());
+                assert_eq!(result.vault_type(), VaultType::database(UseAwsKms::No));
+                let result: Result<()> = Ok(());
+                result
+            }
+        })
+        .await?;
 
         Ok(())
     }
@@ -737,7 +757,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_vault_with_a_user_path() -> Result<()> {
         let cli = CliState::test().await?;
-        let vault_path = cli.dir().join(random_name());
+        let vault_path = cli.dir()?.join(random_name());
 
         let result = cli
             .create_named_vault(

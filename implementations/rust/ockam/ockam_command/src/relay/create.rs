@@ -4,24 +4,23 @@ use std::str::FromStr;
 use clap::Args;
 use colorful::Colorful;
 use miette::{miette, IntoDiagnostic};
-use tokio::sync::Mutex;
-use tokio::try_join;
-use tracing::info;
+use tracing::debug;
 
 use ockam::identity::Identifier;
 use ockam::Context;
 use ockam_api::address::extract_address_value;
-use ockam_api::colors::{color_primary, OckamColor};
+use ockam_api::colors::color_primary;
 
+use ockam_api::nodes::models::relay::ReturnTiming;
 use ockam_api::nodes::service::relay::Relays;
 use ockam_api::nodes::BackgroundNodeClient;
-use ockam_api::{fmt_log, fmt_ok, CliState};
+use ockam_api::{fmt_info, fmt_ok, fmt_warn, CliState, ConnectionStatus};
 use ockam_multiaddr::proto::Project;
 use ockam_multiaddr::{MultiAddr, Protocol};
 
 use crate::node::util::initialize_default_node;
 use crate::shared_args::RetryOpts;
-use crate::util::process_nodes_multiaddr;
+use crate::util::{print_warning_for_deprecated_flag_no_effect, process_nodes_multiaddr};
 use crate::{docs, Command, CommandGlobalOpts, Error, Result};
 
 const AFTER_LONG_HELP: &str = include_str!("./static/create/after_long_help.txt");
@@ -55,10 +54,14 @@ pub struct CreateCommand {
     #[arg(long)]
     relay_address: Option<String>,
 
-    /// Whether the relay will be used to relay messages at a project.
+    /// [DEPRECATED] Whether the relay will be used to relay messages at a project.
     /// By default, this information will be inferred from the `--at` argument.
     #[arg(long)]
     project_relay: bool,
+
+    /// Create the Relay without waiting for the connection to be established
+    #[arg(long, default_value = "false")]
+    pub no_connection_wait: bool,
 
     #[command(flatten)]
     retry_opts: RetryOpts,
@@ -76,75 +79,106 @@ impl Command for CreateCommand {
         Some(self.retry_opts.clone())
     }
 
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+        if self.project_relay {
+            print_warning_for_deprecated_flag_no_effect(&opts, "--project-relay")?;
+        }
+
         initialize_default_node(ctx, &opts).await?;
+
         let cmd = self.parse_args(&opts).await?;
         let at = cmd.at();
         let alias = cmd.relay_name();
-
-        opts.terminal.write_line(&fmt_log!("Creating Relay...\n"))?;
-        let is_finished: Mutex<bool> = Mutex::new(false);
+        let return_timing = cmd.return_timing();
 
         let node = BackgroundNodeClient::create(ctx, &opts.state, &cmd.to).await?;
-        let get_relay_info = async {
-            let relay_info = {
-                if at.starts_with(Project::CODE) && cmd.authorized.is_some() {
-                    return Err(miette!(
-                        "--authorized can not be used with project addresses"
-                    ))?;
-                };
-                info!("creating a relay at {} to {}", at, node.node_name());
-                node.create_relay(
-                    ctx,
-                    &at,
-                    alias.clone(),
-                    cmd.authorized,
-                    Some(cmd.relay_address.unwrap_or(alias)),
-                )
-                .await
-                .map_err(Error::Retry)?
+        let relay_info = {
+            if at.starts_with(Project::CODE) && cmd.authorized.is_some() {
+                return Err(miette!(
+                    "--authorized can not be used with project addresses"
+                ))?;
             };
-            *is_finished.lock().await = true;
-            Ok(relay_info)
+            debug!(
+                "sending request to {} to create a relay at {}",
+                node.node_name(),
+                at
+            );
+            let pb = opts.terminal.spinner();
+            if let Some(pb) = pb.as_ref() {
+                pb.set_message(format!(
+                    "Creating relay at {}...",
+                    color_primary(at.to_string())
+                ));
+            }
+            node.create_relay(
+                ctx,
+                &at,
+                alias.clone(),
+                cmd.authorized,
+                Some(cmd.relay_address.unwrap_or(alias)),
+                return_timing.clone(),
+            )
+            .await
+            .map_err(Error::Retry)?
         };
 
-        let output_messages = vec![
-            format!(
-                "Creating relay relay service at {}...",
-                &at.to_string().color(OckamColor::PrimaryResource.color())
-            ),
-            format!(
-                "Setting up receiving relay mailbox on node {}...",
-                &node.node_name().color(OckamColor::PrimaryResource.color())
-            ),
-        ];
-        let progress_output = opts.terminal.loop_messages(&output_messages, &is_finished);
+        match return_timing {
+            ReturnTiming::Immediately => {
+                let plain = {
+                    let from = color_primary(&at);
+                    let to = color_primary(format!("/node/{}", &node.node_name()));
+                    fmt_ok!("Relay will be created automatically from {from} → {to} as soon as a connection can be established.")
+                };
+                opts.terminal
+                    .stdout()
+                    .plain(plain)
+                    .json_obj(relay_info)?
+                    .write_line()?;
+            }
+            ReturnTiming::AfterConnection => {
+                if relay_info.connection_status() == ConnectionStatus::Up {
+                    let invalid_relay_error_msg =
+                        "The Orchestrator returned an invalid relay address. Try creating a new one.";
 
-        let (relay, _) = try_join!(get_relay_info, progress_output)?;
+                    let remote_address = relay_info
+                        .remote_address_ma()
+                        .into_diagnostic()?
+                        .ok_or(miette!(invalid_relay_error_msg))?;
+                    let worker_address = relay_info
+                        .worker_address_ma()
+                        .into_diagnostic()?
+                        .ok_or(miette!(invalid_relay_error_msg))?;
 
-        let invalid_relay_error_msg =
-            "The Orchestrator returned an invalid relay address. Try creating a new one.";
-        let remote_address = relay
-            .remote_address_ma()
-            .into_diagnostic()?
-            .ok_or(miette!(invalid_relay_error_msg))?;
-        let worker_address = relay
-            .worker_address_ma()
-            .into_diagnostic()?
-            .ok_or(miette!(invalid_relay_error_msg))?;
+                    let plain = {
+                        // `remote_address` in the project is relaying to worker at address `worker_address` on that node.
+                        let from = color_primary(format!("{}{}", &at, remote_address));
+                        let to =
+                            color_primary(format!("/node/{}{}", &node.node_name(), worker_address));
 
-        let plain = {
-            // `remote_address` in the project is relaying to worker at address `worker_address` on that node.
-            let from = color_primary(format!("{}{}", &at, remote_address));
-            let to = color_primary(format!("/node/{}{}", &node.node_name(), worker_address));
-            fmt_ok!("Now relaying messages from {from} → {to}")
-        };
-        opts.terminal
-            .stdout()
-            .plain(plain)
-            .machine(remote_address.to_string())
-            .json(serde_json::to_string(&relay).into_diagnostic()?)
-            .write_line()?;
+                        fmt_ok!("Now relaying messages from {from} → {to}")
+                    };
+
+                    opts.terminal
+                        .stdout()
+                        .plain(plain)
+                        .machine(remote_address.to_string())
+                        .json_obj(relay_info)?
+                        .write_line()?;
+                } else {
+                    let plain = {
+                        let at = color_primary(&at);
+                        let node = color_primary(format!("/node/{}", &node.node_name()));
+                        fmt_warn!("A relay was created at {node} but failed to connect to {at}\n")
+                            + &fmt_info!("It will automatically connect to the Relay as soon as it is available")
+                    };
+                    opts.terminal
+                        .stdout()
+                        .plain(plain)
+                        .json_obj(relay_info)?
+                        .write_line()?;
+                }
+            }
+        }
 
         Ok(())
     }
@@ -190,6 +224,14 @@ impl CreateCommand {
         }
         let ma = MultiAddr::from_str(&at).map_err(|_| Error::arg_validation("at", at, None))?;
         process_nodes_multiaddr(&ma, state).await
+    }
+
+    fn return_timing(&self) -> ReturnTiming {
+        if self.no_connection_wait {
+            ReturnTiming::Immediately
+        } else {
+            ReturnTiming::AfterConnection
+        }
     }
 }
 

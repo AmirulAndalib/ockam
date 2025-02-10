@@ -1,7 +1,7 @@
 use core::str::FromStr;
 use std::net::{SocketAddr, ToSocketAddrs};
 
-use ockam_core::{async_trait, Address, AsyncTryClone, DenyAll, Result};
+use ockam_core::{Address, Result, TryClone};
 use ockam_node::Context;
 use ockam_transport_core::TransportError;
 
@@ -12,24 +12,11 @@ use crate::{parse_socket_addr, WebSocketAddress};
 /// A handle to connect to a WebSocketRouter.
 ///
 /// Dropping this handle is harmless.
+#[derive(TryClone)]
+#[try_clone(crate = "ockam_core")]
 pub(crate) struct WebSocketRouterHandle {
     ctx: Context,
     api_addr: Address,
-}
-
-#[async_trait]
-impl AsyncTryClone for WebSocketRouterHandle {
-    async fn async_try_clone(&self) -> Result<Self> {
-        let child_ctx = self
-            .ctx
-            .new_detached(
-                Address::random_tagged("WebSocketRouterHandle.async_try_clone.detached"),
-                DenyAll,
-                DenyAll,
-            )
-            .await?;
-        Ok(Self::new(child_ctx, self.api_addr.clone()))
-    }
 }
 
 impl WebSocketRouterHandle {
@@ -64,10 +51,11 @@ impl WebSocketRouterHandle {
     /// Bind an incoming connection listener for this router.
     pub(crate) async fn bind(&self, addr: impl Into<SocketAddr>) -> Result<SocketAddr> {
         let socket_addr = addr.into();
-        WebSocketListenProcessor::start(&self.ctx, self.async_try_clone().await?, socket_addr).await
+        WebSocketListenProcessor::start(&self.ctx, self.try_clone()?, socket_addr).await
     }
 
     /// Return the peer's `SocketAddr` and `hostnames` given a plain `String` address.
+    // TODO: Remove in favor of `ockam_node::compat::asynchronous::resolve_peer`
     pub(crate) fn resolve_peer(peer: impl Into<String>) -> Result<(SocketAddr, Vec<String>)> {
         let peer_str = peer.into();
         let peer_addr;
@@ -84,12 +72,12 @@ impl WebSocketRouterHandle {
             if let Some(p) = iter.find(|x| x.is_ipv4()) {
                 peer_addr = p;
             } else {
-                return Err(TransportError::InvalidAddress)?;
+                return Err(TransportError::InvalidAddress(peer_str))?;
             }
 
             hostnames = vec![peer_str];
         } else {
-            return Err(TransportError::InvalidAddress)?;
+            return Err(TransportError::InvalidAddress(peer_str))?;
         }
 
         Ok((peer_addr, hostnames))
@@ -102,7 +90,7 @@ impl WebSocketRouterHandle {
 
         // Create a new `WorkerPair` for the given peer, initializing a new pair
         // of sender worker and receiver processor.
-        let pair = WorkerPair::from_client(&self.ctx, peer_addr, hostnames).await?;
+        let pair = WorkerPair::from_client(&self.ctx, peer_addr, hostnames)?;
 
         // Handle node's register request.
         self.register(&pair).await

@@ -1,5 +1,6 @@
-use crate::tokio::{sync::mpsc::error::SendError, time::error::Elapsed};
+use crate::tokio::sync::mpsc::error::SendError;
 use core::fmt;
+use core::time::Duration;
 use ockam_core::{
     compat::error::Error as StdError,
     errcode::{Kind, Origin},
@@ -56,10 +57,15 @@ impl NodeError {
         .context("SendError", err)
     }
 
-    /// Create an ockam_core::Error from a tokio::Elapsed
+    /// Create an ockam_core::Error an elapsed timeout
     #[track_caller]
-    pub(crate) fn with_elapsed(self, err: Elapsed) -> Error {
-        Error::new(Origin::Node, Kind::Timeout, err).context("Type", self)
+    pub(crate) fn with_timeout(self, duration: Duration) -> Error {
+        Error::new(
+            Origin::Node,
+            Kind::Timeout,
+            format!("timeout: {duration:?}"),
+        )
+        .context("Type", self)
     }
 }
 
@@ -148,6 +154,8 @@ pub enum WorkerReason {
     Faulty,
     /// The worker is otherwise corrupt and can not be recovered
     Corrupt,
+    /// Couldn't send shutdown signal
+    CtrlChannelError,
 }
 
 impl fmt::Display for WorkerReason {
@@ -159,6 +167,7 @@ impl fmt::Display for WorkerReason {
                 Self::Shutdown => "target worker is shutting down",
                 Self::Faulty => "target worker is faulty and waiting for supervisor",
                 Self::Corrupt => "target worker is corrupt and can not be recovered",
+                Self::CtrlChannelError => "target worker cannot receive shutdown signal",
             }
         )
     }

@@ -1,15 +1,8 @@
-use std::process::Stdio;
-
-use async_trait::async_trait;
-use miette::{IntoDiagnostic, Result};
-use tokio::process::Child;
-use tracing::debug;
-
-use ockam_core::AsyncTryClone;
-use ockam_node::Context;
-
-use crate::run::parser::resource::utils::{binary_path, subprocess_stdio};
 use crate::{Command, CommandGlobalOpts};
+use async_trait::async_trait;
+use miette::Result;
+use ockam_node::Context;
+use tracing::debug;
 
 /// This trait defines the methods that a resource must implement before it's parsed into a Command.
 ///
@@ -19,21 +12,6 @@ pub trait Resource<C: ParsedCommand>: Sized + Send + Sync + 'static {
 
     fn args(self) -> Vec<String> {
         vec![]
-    }
-
-    fn run_in_subprocess(self, quiet: bool) -> Result<Child> {
-        let args = self.args();
-        let args = Self::COMMAND_NAME
-            .split(' ')
-            .chain(args.iter().map(|s| s.as_str()));
-        let handle = tokio::process::Command::new(binary_path())
-            .args(args)
-            .stdout(subprocess_stdio(quiet))
-            .stderr(subprocess_stdio(quiet))
-            .stdin(Stdio::null())
-            .spawn()
-            .into_diagnostic()?;
-        Ok(handle)
     }
 }
 
@@ -62,8 +40,8 @@ where
     }
 
     async fn run(&self, ctx: &Context, opts: &CommandGlobalOpts) -> Result<()> {
-        debug!("Running command: {}", self.name());
-        Ok(self.clone().async_run_with_retry(ctx, opts.clone()).await?)
+        debug!("running command {} {:?}", self.name(), self);
+        Ok(self.clone().run_with_retry(ctx, opts.clone()).await?)
     }
 }
 
@@ -89,12 +67,13 @@ impl ParsedCommands {
 
     /// Validate and run each command
     pub async fn run(self, ctx: &Context, opts: &CommandGlobalOpts) -> Result<()> {
-        for cmd in self.commands.into_iter() {
+        let len = self.commands.len();
+        for (idx, cmd) in self.commands.into_iter().enumerate() {
             if cmd.is_valid(ctx, opts).await? {
-                let ctx = ctx.async_try_clone().await.into_diagnostic()?;
-                cmd.run(&ctx, opts).await?;
-                // Newline between commands
-                opts.terminal.write_line("")?;
+                cmd.run(ctx, opts).await?;
+                if idx < len - 1 {
+                    opts.terminal.write_line("")?;
+                }
             }
         }
         Ok(())

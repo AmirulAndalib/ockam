@@ -14,7 +14,6 @@ use ockam::identity::{
 use ockam_api::{fmt_err, fmt_log, fmt_ok};
 use ockam_vault::{SoftwareVaultForVerifyingSignatures, VaultForVerifyingSignatures};
 
-use crate::util::async_cmd;
 use crate::util::parsers::identity_identifier_parser;
 use crate::CommandGlobalOpts;
 
@@ -31,12 +30,6 @@ pub struct VerifyCommand {
 }
 
 impl VerifyCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |_ctx| async move {
-            self.async_run(opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "credential verify".into()
     }
@@ -45,8 +38,8 @@ impl VerifyCommand {
         &self.issuer
     }
 
-    async fn async_run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        let (is_valid, plain_text) = match verify_credential(
+    pub async fn run(&self, opts: CommandGlobalOpts) -> miette::Result<()> {
+        let (is_valid, plain) = match verify_credential(
             &opts,
             self.issuer(),
             &self.credential,
@@ -55,15 +48,12 @@ impl VerifyCommand {
         .await
         {
             Ok(_) => (true, fmt_ok!("Credential is valid")),
-            Err(e) => (
-                false,
-                fmt_err!("Credential is not valid\n") + &fmt_log!("{}", e),
-            ),
+            Err(e) => (false, fmt_err!("{e}")),
         };
 
         opts.terminal
             .stdout()
-            .plain(plain_text)
+            .plain(plain)
             .json(serde_json::json!({ "is_valid": is_valid }))
             .machine(is_valid.to_string())
             .write_line()?;
@@ -79,7 +69,7 @@ pub async fn verify_credential(
     credential_path: &Option<PathBuf>,
 ) -> miette::Result<CredentialAndPurposeKey> {
     opts.terminal
-        .write_line(&fmt_log!("Verifying credential...\n"))?;
+        .write_line(fmt_log!("Verifying credential...\n"))?;
 
     let is_finished: Mutex<bool> = Mutex::new(false);
 
@@ -110,7 +100,7 @@ pub async fn verify_credential(
         .await;
 
         *is_finished.lock().await = true;
-        result.map_err(|e| e.wrap_err("Credential is invalid"))
+        result.map_err(|e| e.wrap_err("Credential is not valid"))
     };
 
     let output_messages = vec!["Verifying credential...".to_string()];

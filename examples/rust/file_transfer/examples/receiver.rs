@@ -27,7 +27,7 @@ impl Worker for FileReception {
     async fn handle_message(&mut self, ctx: &mut Context, msg: Routed<Self::Message>) -> Result<()> {
         match msg.into_body()? {
             FileData::Description(desc) => {
-                self.name = desc.name.clone();
+                self.name.clone_from(&desc.name);
                 self.size = desc.size;
                 self.file = Some(
                     OpenOptions::new()
@@ -58,7 +58,7 @@ impl Worker for FileReception {
                         Ok(n) => {
                             self.written_size += n;
                             if self.written_size == self.size {
-                                ctx.stop().await?;
+                                ctx.shutdown_node().await?;
                             }
                         }
                         Err(e) => {
@@ -71,7 +71,7 @@ impl Worker for FileReception {
                     );
                 }
             }
-            FileData::Quit => ctx.stop().await?,
+            FileData::Quit => ctx.shutdown_node().await?,
         }
 
         Ok(())
@@ -81,7 +81,7 @@ impl Worker for FileReception {
 #[ockam::node]
 async fn main(ctx: Context) -> Result<()> {
     let node = node(ctx).await?;
-    let tcp = node.create_tcp_transport().await?;
+    let tcp = node.create_tcp_transport()?;
 
     // Create an Identity to represent Receiver.
     let receiver = node.create_identity().await?;
@@ -90,13 +90,14 @@ async fn main(ctx: Context) -> Result<()> {
     let secure_channel_listener_options =
         SecureChannelListenerOptions::new().as_consumer(&tcp_options.flow_control_id());
 
-    node.flow_controls()
-        .add_consumer("receiver", &secure_channel_listener_options.spawner_flow_control_id());
+    node.flow_controls().add_consumer(
+        &"receiver".into(),
+        &secure_channel_listener_options.spawner_flow_control_id(),
+    );
 
     // Create a secure channel listener for Receiver that will wait for requests to
     // initiate an Authenticated Key Exchange.
-    node.create_secure_channel_listener(&receiver, "listener", secure_channel_listener_options)
-        .await?;
+    node.create_secure_channel_listener(&receiver, "listener", secure_channel_listener_options)?;
 
     // The computer that is running this program is likely within a private network and
     // not accessible over the internet.
@@ -107,15 +108,17 @@ async fn main(ctx: Context) -> Result<()> {
     //
     // All messages that arrive at that forwarding address will be sent to this program
     // using the TCP connection we created as a client.
-    let node_in_hub = tcp.connect("1.node.ockam.network:4000", tcp_options).await?;
-    let relay = node.create_relay(node_in_hub, RemoteRelayOptions::new()).await?;
+    let node_in_orchestrator = tcp.connect("1.node.ockam.network:4000", tcp_options).await?;
+    let relay = node
+        .create_relay(node_in_orchestrator, RemoteRelayOptions::new())
+        .await?;
     println!("\n[✓] RemoteRelay was created on the node at: 1.node.ockam.network:4000");
     println!("Forwarding address for Receiver is:");
     println!("{}", relay.remote_address());
 
     // Start a worker, of type FileReception, at address "receiver".
-    node.start_worker("receiver", FileReception::default()).await?;
+    node.start_worker("receiver", FileReception::default())?;
 
-    // We won't call ctx.stop() here, this program will quit when the file will be entirely received
+    // We won't call ctx.shutdown_node() here, this program will quit when the file will be entirely received
     Ok(())
 }

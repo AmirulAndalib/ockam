@@ -1,12 +1,14 @@
 use clap::Args;
 
+use colorful::Colorful;
 use ockam::Context;
+use ockam_api::colors::color_primary;
 use ockam_api::nodes::models::transport::TransportStatus;
 use ockam_api::nodes::BackgroundNodeClient;
+use ockam_api::{fmt_log, fmt_ok};
 use ockam_core::api::Request;
 
 use crate::node::NodeOpts;
-use crate::util::async_cmd;
 use crate::{docs, CommandGlobalOpts};
 
 const PREVIEW_TAG: &str = include_str!("../../static/preview_tag.txt");
@@ -26,17 +28,11 @@ pub struct ShowCommand {
 }
 
 impl ShowCommand {
-    pub fn run(self, opts: CommandGlobalOpts) -> miette::Result<()> {
-        async_cmd(&self.name(), opts.clone(), |ctx| async move {
-            self.async_run(&ctx, opts).await
-        })
-    }
-
     pub fn name(&self) -> String {
         "tcp-connection show".into()
     }
 
-    async fn async_run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
+    pub async fn run(&self, ctx: &Context, opts: CommandGlobalOpts) -> miette::Result<()> {
         let node = BackgroundNodeClient::create(ctx, &opts.state, &self.node_opts.at_node).await?;
         let transport_status: TransportStatus = node
             .ask(
@@ -45,16 +41,32 @@ impl ShowCommand {
             )
             .await?;
 
-        println!("TCP Connection:");
-        println!("  Type: {}", transport_status.tt);
-        println!("  Mode: {}", transport_status.tm);
-        println!("  Socket address: {}", transport_status.socket_addr);
-        println!("  Worker address: {}", transport_status.worker_addr);
-        println!(
-            "  Processor address: {}",
-            transport_status.processor_address
-        );
-        println!("  Flow Control Id: {}", transport_status.flow_control_id);
+        opts.terminal
+            .stdout()
+            .plain(
+                fmt_ok!("TCP Connection:\n")
+                    + &fmt_log!(
+                        "  Type: {}\n",
+                        color_primary(transport_status.tt.to_string())
+                    )
+                    + &fmt_log!(
+                        "  Mode: {}\n",
+                        color_primary(transport_status.tm.to_string())
+                    )
+                    + &fmt_log!(
+                        "  Socket address: {}\n",
+                        color_primary(&transport_status.socket_addr)
+                    )
+                    + &fmt_log!(
+                        "  Processor address: {}\n",
+                        color_primary(&transport_status.processor_address)
+                    )
+                    + &fmt_log!(
+                        "  Flow Control Id: {}\n",
+                        color_primary(transport_status.flow_control_id.to_string())
+                    ),
+            )
+            .write_line()?;
 
         Ok(())
     }

@@ -5,36 +5,19 @@ use crate::{
 };
 
 use crate::router::BleRouterMessage;
-use ockam_core::{
-    async_trait,
-    compat::{boxed::Box, string::String, vec::Vec},
-    AllowAll,
-};
-use ockam_core::{Address, AsyncTryClone, Result};
+use ockam_core::compat::{string::String, vec::Vec};
+use ockam_core::{Address, Result, TryClone};
 use ockam_node::Context;
 use ockam_transport_core::TransportError;
 
 /// A handle to connect to a BleRouter
 ///
 /// Dropping this handle is harmless.
+#[derive(TryClone)]
+#[try_clone(crate = "ockam_core")]
 pub(crate) struct BleRouterHandle {
     ctx: Context,
     api_addr: Address,
-}
-
-#[async_trait]
-impl AsyncTryClone for BleRouterHandle {
-    async fn async_try_clone(&self) -> Result<Self> {
-        let child_ctx = self
-            .ctx
-            .new_detached(
-                Address::random_tagged("BleRouterHandle.async_try_clone.detached"),
-                AllowAll,
-                AllowAll,
-            )
-            .await?;
-        Ok(Self::new(child_ctx, self.api_addr.clone()))
-    }
 }
 
 impl BleRouterHandle {
@@ -72,26 +55,21 @@ impl BleRouterHandle {
         addr: S,
     ) -> Result<()> {
         let ble_addr = addr.into();
-        BleListenProcessor::start(
-            ble_server,
-            &self.ctx,
-            self.async_try_clone().await?,
-            ble_addr,
-        )
-        .await
+        BleListenProcessor::start(ble_server, &self.ctx, self.try_clone()?, ble_addr).await
     }
 
+    // TODO: Remove in favor of `ockam_node::compat::asynchronous::resolve_peer`
     pub(crate) fn resolve_peer(peer: impl Into<String>) -> Result<(BleAddr, Vec<String>)> {
         let peer_str = peer.into();
         let peer_addr;
         let servicenames;
 
         // Try to parse as BleAddr
-        if let Ok(p) = crate::parse_ble_addr(peer_str) {
+        if let Ok(p) = crate::parse_ble_addr(peer_str.clone()) {
             peer_addr = p;
             servicenames = vec![];
         } else {
-            return Err(TransportError::InvalidAddress)?;
+            return Err(TransportError::InvalidAddress(peer_str))?;
         }
 
         Ok((peer_addr, servicenames))
@@ -112,7 +90,7 @@ impl BleRouterHandle {
         ble_client.connect().await?;
 
         let stream = crate::driver::AsyncStream::with_ble_device(ble_client);
-        let pair = BleSendWorker::start_pair(&self.ctx, stream, peer_addr, servicenames).await?;
+        let pair = BleSendWorker::start_pair(&self.ctx, stream, peer_addr, servicenames)?;
 
         self.register(&pair).await?;
 

@@ -1,6 +1,6 @@
 [package]
 name = "ockam_command"
-version = "0.127.0"
+version = "0.147.0"
 authors = ["Ockam Developers"]
 categories = [
   "cryptography",
@@ -24,14 +24,8 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/build-trust/ockam/implementations/rust/ockam/ockam_command"
-rust-version = "1.58.1"
+rust-version = "1.70.0"
 description = "End-to-end encryption and mutual authentication for distributed applications."
-
-[package.metadata.cross.target.aarch64-unknown-linux-musl]
-dockerfile = "../../../../tools/cross/Cross.Dockerfile.aarch64"
-
-[package.metadata.cross.target.armv7-unknown-linux-musleabihf]
-dockerfile = "../../../../tools/cross/Cross.Dockerfile.armv7"
 
 [[bin]]
 # You may be wondering "Why are the tests and docs disabled?". The long and
@@ -52,66 +46,68 @@ doc = false
 test = false
 path = "src/bin/ockam.rs"
 
+[build-dependencies]
+cfg_aliases = "0.2.1"
+
 [dependencies]
-arboard = "3.4.0"
+arboard = "3.4.1"
 async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "cargo", "wrap_help"] }
-clap_complete = "4.5.6"
-clap_mangen = "0.2.21"
-colorful = "0.2"
+clap_complete = "4.5.28"
+clap_mangen = "0.2.23"
+colorful = "0.3"
 console = "0.15.8"
 ctrlc = { version = "3.4.4", features = ["termination"] }
-flate2 = "1.0.30"
+flate2 = "1.0.35"
 hex = "0.4"
 indicatif = "0.17.8"
 indoc = "2.0.5"
 miette = { version = "7.2.0", features = ["fancy-no-backtrace"] }
-minicbor = { version = "0.24.1", features = ["derive", "alloc", "half"] }
-ockam = { path = "../ockam", version = "^0.127.0", features = ["software_vault"] }
-ockam_abac = { path = "../ockam_abac", version = "0.60.0", features = ["std"] }
-ockam_api = { path = "../ockam_api", version = "0.70.0", default-features = false, features = ["std"] }
-ockam_core = { path = "../ockam_core", version = "^0.111.0" }
-ockam_multiaddr = { path = "../ockam_multiaddr", version = "0.55.0", features = ["std"] }
-ockam_node = { path = "../ockam_node", version = "^0.119.0" }
-ockam_vault = { path = "../ockam_vault", version = "^0.112.0", default-features = false, features = ["storage", "std"] }
+mimalloc = { version = "0.1", features = ["secure"] }
+minicbor = { version = "0.25.1", default-features = false, features = ["alloc", "derive"] }
+nix = { version = "0.29", features = ["signal"] }
+ockam = { path = "../ockam", version = "^0.147.0", features = ["software_vault"] }
+ockam_abac = { path = "../ockam_abac", version = "0.78.0", features = ["std"] }
+ockam_api = { path = "../ockam_api", version = "0.90.0", default-features = false, features = ["std"] }
+ockam_core = { path = "../ockam_core", version = "^0.124.0" }
+ockam_multiaddr = { path = "../ockam_multiaddr", version = "0.69.0", features = ["std"] }
+ockam_node = { path = "../ockam_node", version = "^0.137.0" }
+ockam_vault = { path = "../ockam_vault", version = "^0.130.0", default-features = false, features = ["storage", "std"] }
 once_cell = "1.19"
-open = "5.1.4"
-opentelemetry = { version = "0.23.0", features = ["metrics", "trace"] }
+open = "5.3.0"
+opentelemetry = { version = "0.26.0", features = ["metrics", "trace"] }
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 r3bl_rs_utils_core = "0.9.12"
-r3bl_tui = "0.5.5"
+r3bl_tui = "0.5.8"
 rand = "0.8"
-regex = "1.10.5"
+regex = "1.10.6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "blocking"] }
-rustls = { version = "0.23.10", default-features = false }
-rustls-native-certs = "0.7.0"
+rustls = { version = "0.23.13", default-features = false }
+rustls-native-certs = "0.8.0"
 rustls-pki-types = "1.7.0"
 semver = "1.0.23"
 serde = { version = "1", features = ["derive"] }
-serde_bare = { version = "0.5.0", default-features = false, features = ["alloc"] }
 serde_json = "1"
 serde_yaml = "0.9"
 shellexpand = { version = "3.1.0", default-features = false, features = ["base-0"] }
 syntect = { version = "5.2.0", default-features = false, features = ["default-syntaxes", "regex-onig"] }
-termbg = "0"
 thiserror = "1"
-time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
-tokio = { version = "1.38.0", features = ["full"] }
+tokio = { version = "1.41.0", features = ["full"] }
 tokio-retry = "0.3"
 tracing = { version = "0.1", default-features = false }
-tracing-core = { version = "0.1.32", default-features = false }
 url = "2.5.2"
-which = "6.0.1"
+which = "6.0.2"
 
 [dev-dependencies]
 assert_cmd = "2"
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0" }
-proptest = "1.5.0"
+mockito = "1.5.0"
+ockam_api = { path = "../ockam_api", version = "0.90.0", default-features = false, features = ["test-utils"] }
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0" }
+serial_test = "3.0.0"
 tempfile = "3.10.1"
-time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 
 [features]
-default = ["orchestrator", "rust-crypto"]
-orchestrator = []
+default = ["rust-crypto", "privileged_portals"]
+privileged_portals = ["ockam_api/privileged_portals"]
 aws-lc = ["ockam_vault/aws-lc", "ockam_api/aws-lc", "rustls/aws-lc-rs"]
 rust-crypto = ["ockam_vault/rust-crypto", "ockam_api/rust-crypto", "rustls/ring"]

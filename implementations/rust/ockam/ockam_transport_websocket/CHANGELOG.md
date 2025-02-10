@@ -4,6 +4,120 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.126.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.125.0 - 2025-01-09
+
+### Added
+
+- Improve logs for tcp portals creation
+- Updated dependencies
+
+## 0.124.0 - 2024-12-12
+
+### Added
+
+- Updated dependencies
+
+## 0.123.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.122.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.121.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.120.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.119.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.118.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.117.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.116.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.115.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.114.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.113.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.112.0 - 2024-08-06
+
+### Added
+
+- Updated dependencies
+
+## 0.111.0 - 2024-07-29
+
+### Added
+
+- Remove sync operations
+- Updated dependencies
+
+## 0.110.0 - 2024-07-03
+
+### Added
+
+- Display a malformed transport address
+- Updated dependencies
+
+## 0.109.0 - 2024-07-01
+
+### Added
+
+- Change tcp protocol serialization
+- Updated dependencies
+
 ## 0.108.0 - 2024-06-25
 
 ### Added

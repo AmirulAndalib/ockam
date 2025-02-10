@@ -1,11 +1,13 @@
 use crate::workers::Addresses;
 use ockam_core::compat::sync::Arc;
+use ockam_core::compat::time::Duration;
 use ockam_core::flow_control::{FlowControlId, FlowControlOutgoingAccessControl, FlowControls};
 use ockam_core::{Address, OutgoingAccessControl};
 
 /// Trust Options for a TCP connection
 #[derive(Debug)]
 pub struct TcpConnectionOptions {
+    pub(super) timeout: Option<Duration>,
     pub(super) consumer: Vec<FlowControlId>,
     pub(crate) flow_control_id: FlowControlId,
 }
@@ -15,6 +17,7 @@ impl TcpConnectionOptions {
     /// Mark this Tcp Receiver as a Producer with a random [`FlowControlId`]
     pub fn new() -> Self {
         Self {
+            timeout: None,
             consumer: vec![],
             flow_control_id: FlowControls::generate_flow_control_id(),
         }
@@ -31,19 +34,36 @@ impl TcpConnectionOptions {
     pub fn flow_control_id(&self) -> FlowControlId {
         self.flow_control_id.clone()
     }
+
+    /// Set connect timeout
+    pub fn set_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Set connect timeout
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+
+    /// Connect timeout
+    pub fn timeout(&self) -> Option<Duration> {
+        self.timeout
+    }
 }
 
 impl TcpConnectionOptions {
     pub(crate) fn setup_flow_control(&self, flow_controls: &FlowControls, addresses: &Addresses) {
         flow_controls.add_producer(
-            addresses.receiver_address().clone(),
+            addresses.receiver_address(),
             &self.flow_control_id,
             None,
             vec![addresses.sender_address().clone()],
         );
 
         for id in &self.consumer {
-            flow_controls.add_consumer(addresses.sender_address().clone(), id);
+            flow_controls.add_consumer(addresses.sender_address(), id);
         }
     }
 
@@ -88,7 +108,7 @@ impl TcpListenerOptions {
         flow_controls: &FlowControls,
         address: &Address,
     ) {
-        flow_controls.add_spawner(address.clone(), &self.flow_control_id);
+        flow_controls.add_spawner(address, &self.flow_control_id);
     }
 
     pub(crate) fn setup_flow_control_for_connection(
@@ -99,7 +119,7 @@ impl TcpListenerOptions {
         let flow_control_id = FlowControls::generate_flow_control_id();
 
         flow_controls.add_producer(
-            addresses.receiver_address().clone(),
+            addresses.receiver_address(),
             &flow_control_id,
             Some(&self.flow_control_id),
             vec![addresses.sender_address().clone()],

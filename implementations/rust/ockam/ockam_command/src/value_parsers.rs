@@ -1,7 +1,10 @@
-use crate::util::parsers::socket_addr_parser;
+use crate::util::parsers::hostname_parser;
+use crate::CommandGlobalOpts;
 use miette::{miette, Context, IntoDiagnostic};
-use ockam_api::cli_state::EnrollmentTicket;
+use ockam_api::cli_state::{EnrollmentTicket, ExportedEnrollmentTicket, LegacyEnrollmentTicket};
+use serde::Deserialize;
 use std::str::FromStr;
+use tracing::trace;
 use url::Url;
 
 /// Parse a single key-value pair
@@ -21,40 +24,64 @@ where
     ))
 }
 
-/// Parse an enrollment ticket given a path, a URL or hex-encoded string
-pub fn parse_enrollment_ticket(value: &str) -> miette::Result<EnrollmentTicket> {
-    let contents = parse_string_or_path_or_url(value)?;
-    // Try to deserialize the contents as JSON
-    if let Ok(enrollment_ticket) = serde_json::from_str(&contents) {
-        Ok(enrollment_ticket)
+/// Parse an enrollment ticket given a path, a URL or encoded string
+pub async fn parse_enrollment_ticket(
+    _opts: &CommandGlobalOpts,
+    value: &str,
+) -> miette::Result<EnrollmentTicket> {
+    trace!(%value, "parsing enrollment ticket");
+    let contents = parse_string_or_path_or_url(value).await?;
+
+    // Try to parse it using the old format
+    if let Ok(ticket) = LegacyEnrollmentTicket::from_str(&contents) {
+        return Ok(EnrollmentTicket::new_from_legacy(ticket).await?);
     }
-    // Try to decode the contents as hex
-    else if let Ok(hex_decoded) = hex::decode(contents.trim()) {
-        Ok(serde_json::from_slice(&hex_decoded)
-            .into_diagnostic()
-            .context("Failed to parse enrollment ticket from hex-encoded contents")?)
-    } else {
-        Err(miette!("Failed to parse enrollment ticket argument"))
+
+    Ok(ExportedEnrollmentTicket::from_str(&contents)?
+        .import()
+        .await?)
+}
+
+pub(crate) async fn parse_config_or_path_or_url<'de, T: Deserialize<'de>>(
+    value: &'de str,
+) -> miette::Result<String> {
+    match parse_path_or_url(value).await {
+        Ok(contents) => Ok(contents),
+        Err(_) => {
+            if serde_yaml::from_str::<T>(value).is_ok() {
+                Ok(value.to_string())
+            } else {
+                Err(miette!(
+                    "Failed to parse value {} as a path, URL or configuration",
+                    value
+                ))
+            }
+        }
     }
 }
 
-fn parse_string_or_path_or_url(value: &str) -> miette::Result<String> {
-    parse_path_or_url(value).or_else(|_| Ok(value.to_string()))
+pub(crate) async fn parse_string_or_path_or_url(value: &str) -> miette::Result<String> {
+    parse_path_or_url(value)
+        .await
+        .or_else(|_| Ok(value.to_string()))
 }
 
-pub fn parse_path_or_url(value: &str) -> miette::Result<String> {
+pub(crate) async fn parse_path_or_url(value: &str) -> miette::Result<String> {
     // If the URL is valid, download the contents
     if let Some(url) = is_url(value) {
-        reqwest::blocking::get(url)
+        reqwest::get(url)
+            .await
             .into_diagnostic()
             .context(format!("Failed to download file from {value}"))?
             .text()
+            .await
             .into_diagnostic()
             .context("Failed to read contents from downloaded file")
     }
-    // If not, try to read the contents from a file
-    else if std::fs::metadata(value).is_ok() {
-        std::fs::read_to_string(value)
+    // Try to read the contents from a file
+    else if tokio::fs::metadata(value).await.is_ok() {
+        tokio::fs::read_to_string(value)
+            .await
             .into_diagnostic()
             .context("Failed to read contents from file")
     } else {
@@ -68,17 +95,10 @@ pub fn is_url(value: &str) -> Option<Url> {
     }
     // If the value is a socket address, try to parse it as a URL
     if let Some(socket_addr) = value.split('/').next() {
-        if socket_addr.contains(':') && socket_addr_parser(socket_addr).is_ok() {
+        if socket_addr.contains(':') && hostname_parser(socket_addr).is_ok() {
             let uri = format!("http://{value}");
             return Url::parse(&uri).ok();
         }
     }
     None
-}
-
-pub async fn async_parse_path_or_url(value: &str) -> miette::Result<String> {
-    let value = value.to_string();
-    tokio::task::spawn_blocking(move || parse_path_or_url(&value))
-        .await
-        .into_diagnostic()?
 }

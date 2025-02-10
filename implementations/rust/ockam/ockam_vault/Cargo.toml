@@ -1,6 +1,6 @@
 [package]
 name = "ockam_vault"
-version = "0.112.0"
+version = "0.130.0"
 authors = ["Ockam Developers"]
 categories = [
   "cryptography",
@@ -16,7 +16,7 @@ license = "Apache-2.0"
 publish = true
 readme = "README.md"
 repository = "https://github.com/build-trust/ockam/tree/develop/implementations/rust/ockam/ockam_vault"
-rust-version = "1.56.0"
+rust-version = "1.70.0"
 description = """A software-only Ockam Vault implementation.
 """
 
@@ -25,7 +25,7 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [features]
-default = ["std", "storage", "rust-crypto"]
+default = ["std", "storage", "aws-lc"]
 disable_default_noise_protocol = []
 OCKAM_XX_25519_AES256_GCM_SHA256 = []
 OCKAM_XX_25519_AES128_GCM_SHA256 = []
@@ -38,10 +38,9 @@ rust-crypto = ["dep:aes-gcm"]
 std = [
   "ockam_macros/std",
   "ockam_node/std",
+  "minicbor/std",
   "aes-gcm?/std",
   "ed25519-dalek/std",
-  "rand/std",
-  "rand/std_rng",
   "tracing/std",
   "alloc",
   "p256/std",
@@ -61,6 +60,7 @@ no_std = [
 # Feature: "alloc" enables support for heap allocation (implied by `feature = "std"`)
 alloc = [
   "ockam_node/alloc",
+  "minicbor/alloc",
   "aes-gcm?/alloc",
   "ed25519-dalek/alloc",
   "x25519-dalek/alloc",
@@ -69,37 +69,37 @@ alloc = [
   "p256/pem",
 ]
 
-storage = ["ockam_node/storage", "sqlx"]
+storage = ["ockam_node/storage", "sqlx", "sqlx-core"]
 
 [dependencies]
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "zeroize"], optional = true }
 arrayref = "0.3"
-aws-lc-rs = { version = "1.7", default-features = false, features = ["non-fips", "bindgen"], optional = true }
+aws-lc-rs = { version = "=1.11", default-features = false, features = ["non-fips", "bindgen"], optional = true }
 cfg-if = "1.0.0"
 ed25519-dalek = { version = "2.1", default-features = false, features = ["fast", "rand_core", "zeroize"] }
 hex = { version = "0.4", default-features = false }
 hkdf = { version = "0.12", default-features = false }
-minicbor = { version = "0.24.1", features = ["derive"] }
-ockam_core = { path = "../ockam_core", version = "^0.111.0", default_features = false }
-ockam_macros = { path = "../ockam_macros", version = "^0.34.0", default-features = false }
-ockam_node = { path = "../ockam_node", version = "^0.119.0", default_features = false, optional = true }
+minicbor = { version = "0.25.1", default-features = false, features = ["derive"] }
+ockam_core = { path = "../ockam_core", version = "^0.124.0", default-features = false }
+ockam_macros = { path = "../ockam_macros", version = "^0.37.0", default-features = false }
+ockam_node = { path = "../ockam_node", version = "^0.137.0", default-features = false, optional = true }
 # ECDSA providers:
-p256 = { version = "0.13.2", default_features = false }
-rand = { version = "0.8", default-features = false }
+p256 = { version = "0.13.2", default-features = false }
 rand_pcg = { version = "0.3.1", default-features = false, optional = true }
 serde = { version = "1", default-features = false, features = ["derive"] }
 sha2 = { version = "0.10", default-features = false }
-sqlx = { git = "https://github.com/etorreborre/sqlx", rev = "5fec648d2de0cbeed738dcf1c6f5bc9194fc439b", optional = true }
+sqlx = { version = "0.8.3", optional = true, default-features = false }
+sqlx-core = { version = "0.8.3", optional = true, default-features = false }
 static_assertions = "1.1.0"
 tracing = { version = "0.1", default-features = false }
-x25519-dalek = { version = "2.0.1", default_features = false, features = ["precomputed-tables", "static_secrets", "zeroize"] }
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["precomputed-tables", "static_secrets", "zeroize"] }
 zeroize = { version = "1.8.1", features = ["zeroize_derive"] }
 
 [dev-dependencies]
 serde_bare = { version = "0.5.0" }
 serde_json = { version = "1" }
 tempfile = { version = "3.10.1" }
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.41", features = ["full"] }
 trybuild = { version = "1.0", features = ["diff"] }
 
 [package.metadata.cargo-machete]

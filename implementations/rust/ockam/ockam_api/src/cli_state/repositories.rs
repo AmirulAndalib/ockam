@@ -17,54 +17,54 @@ use crate::cli_state::{UsersRepository, UsersSqlxDatabase};
 /// stored in the database
 impl CliState {
     pub fn change_history_repository(&self) -> Arc<dyn ChangeHistoryRepository> {
-        Arc::new(ChangeHistorySqlxDatabase::new(self.database()))
+        ChangeHistorySqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn identities_repository(&self) -> Arc<dyn IdentitiesRepository> {
-        Arc::new(IdentitiesSqlxDatabase::new(self.database()))
+        IdentitiesSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn purpose_keys_repository(&self) -> Arc<dyn PurposeKeysRepository> {
-        Arc::new(PurposeKeysSqlxDatabase::new(self.database()))
+        PurposeKeysSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn secrets_repository(&self) -> Arc<dyn SecretsRepository> {
-        Arc::new(SecretsSqlxDatabase::new(self.database()))
+        SecretsSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn vaults_repository(&self) -> Arc<dyn VaultsRepository> {
-        Arc::new(VaultsSqlxDatabase::new(self.database()))
+        VaultsSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn enrollment_repository(&self) -> Arc<dyn EnrollmentsRepository> {
-        Arc::new(EnrollmentsSqlxDatabase::new(self.database()))
+        EnrollmentsSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn nodes_repository(&self) -> Arc<dyn NodesRepository> {
-        Arc::new(NodesSqlxDatabase::new(self.database()))
+        NodesSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn tcp_portals_repository(&self) -> Arc<dyn TcpPortalsRepository> {
-        Arc::new(TcpPortalsSqlxDatabase::new(self.database()))
+        TcpPortalsSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn projects_repository(&self) -> Arc<dyn ProjectsRepository> {
-        Arc::new(ProjectsSqlxDatabase::new(self.database()))
+        ProjectsSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn spaces_repository(&self) -> Arc<dyn SpacesRepository> {
-        Arc::new(SpacesSqlxDatabase::new(self.database()))
+        SpacesSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn users_repository(&self) -> Arc<dyn UsersRepository> {
-        Arc::new(UsersSqlxDatabase::new(self.database()))
+        UsersSqlxDatabase::make_repository(self.database())
     }
 
     pub(super) fn user_journey_repository(&self) -> Arc<dyn JourneysRepository> {
-        Arc::new(JourneysSqlxDatabase::new(self.application_database()))
+        JourneysSqlxDatabase::make_repository(self.application_database())
     }
 
     pub fn cached_credentials_repository(&self, node_name: &str) -> Arc<dyn CredentialRepository> {
-        Arc::new(CredentialSqlxDatabase::new(self.database(), node_name))
+        CredentialSqlxDatabase::make_repository(self.database(), node_name)
     }
 }

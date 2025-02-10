@@ -16,13 +16,17 @@ use crate::authenticator::{
     AuthorityEnrollmentTokenRepository, AuthorityMembersRepository, EnrollmentToken,
 };
 
-pub(super) const MAX_TOKEN_DURATION: Duration = Duration::from_secs(600);
+pub const DEFAULT_TOKEN_DURATION: Duration = Duration::from_secs(60 * 10);
+pub const MAX_RECOMMENDED_TOKEN_DURATION: Duration = Duration::from_secs(60 * 60 * 24 * 5);
+pub const DEFAULT_TOKEN_USAGE_COUNT: u64 = 1;
+pub const MAX_RECOMMENDED_TOKEN_USAGE_COUNT: u64 = 10;
 
 pub struct EnrollmentTokenIssuerError(pub String);
 
 pub type EnrollmentTokenIssuerResult<T> = Either<T, EnrollmentTokenIssuerError>;
 
 pub struct EnrollmentTokenIssuer {
+    authority: Identifier,
     pub(super) tokens: Arc<dyn AuthorityEnrollmentTokenRepository>,
     pub(super) members: Arc<dyn AuthorityMembersRepository>,
     pub(super) identities_attributes: Arc<IdentitiesAttributes>,
@@ -31,12 +35,14 @@ pub struct EnrollmentTokenIssuer {
 
 impl EnrollmentTokenIssuer {
     pub fn new(
+        authority: &Identifier,
         tokens: Arc<dyn AuthorityEnrollmentTokenRepository>,
         members: Arc<dyn AuthorityMembersRepository>,
         identities_attributes: Arc<IdentitiesAttributes>,
         account_authority: Option<AccountAuthorityInfo>,
     ) -> Self {
         Self {
+            authority: authority.clone(),
             tokens,
             members,
             identities_attributes,
@@ -53,6 +59,7 @@ impl EnrollmentTokenIssuer {
         ttl_count: Option<u64>,
     ) -> Result<EnrollmentTokenIssuerResult<OneTimeCode>> {
         let check = EnrollerAccessControlChecks::check_identifier(
+            &self.authority,
             self.members.clone(),
             self.identities_attributes.clone(),
             enroller,
@@ -90,12 +97,12 @@ impl EnrollmentTokenIssuer {
             .take(10)
             .map(char::from)
             .collect();
-        let max_token_duration = token_duration.unwrap_or(MAX_TOKEN_DURATION);
-        let ttl_count = ttl_count.unwrap_or(1);
+        let max_token_duration = token_duration.unwrap_or(DEFAULT_TOKEN_DURATION);
+        let ttl_count = ttl_count.unwrap_or(DEFAULT_TOKEN_USAGE_COUNT);
         let now = now()?;
         let expires_at = now + max_token_duration.as_secs();
         let tkn = EnrollmentToken {
-            one_time_code: one_time_code.clone(),
+            one_time_code,
             reference: Some(reference.clone()),
             issued_by: enroller.clone(),
             created_at: now,

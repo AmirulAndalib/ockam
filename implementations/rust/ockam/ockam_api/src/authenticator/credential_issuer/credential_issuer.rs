@@ -82,9 +82,12 @@ impl CredentialIssuer {
                     == Some(&info.project_identifier().as_bytes().to_vec())
                 {
                     let mut subject_attributes = self.subject_attributes.clone();
+                    subject_attributes
+                        .map
+                        .insert(b"ockam-relay".to_vec().into(), b"*".to_vec().into());
                     subject_attributes.map.insert(
-                        "ockam-relay".as_bytes().to_vec().into(),
-                        "*".as_bytes().to_vec().into(),
+                        b"ockam-tls-certificate".to_vec().into(),
+                        b"true".to_vec().into(),
                     );
                     let credential = self
                         .credentials
@@ -105,7 +108,7 @@ impl CredentialIssuer {
 
         // Otherwise, check if it's a member managed by this authority
 
-        let member = match self.members.get_member(subject).await? {
+        let member = match self.members.get_member(&self.issuer, subject).await? {
             Some(member) => member,
             None => return Ok(None),
         };

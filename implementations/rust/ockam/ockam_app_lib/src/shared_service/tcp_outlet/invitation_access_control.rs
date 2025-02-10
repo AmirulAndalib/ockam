@@ -1,11 +1,12 @@
 use crate::invitations::state::InvitationState;
 use crate::state::AppState;
 use ockam::abac::Abac;
-use ockam::identity::{Identifier, IdentitiesAttributes, IdentitySecureChannelLocalInfo};
+use ockam::identity::{Identifier, IdentitiesAttributes};
 use ockam::Context;
 use ockam_core::errcode::Origin;
 use ockam_core::{
     async_trait, Address, DenyAll, IncomingAccessControl, OutgoingAccessControl, RelayMessage,
+    SecureChannelLocalInfo,
 };
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -92,17 +93,15 @@ impl InvitationAccessControl {
         }
     }
 
-    pub async fn create_outgoing(
+    pub fn create_outgoing(
         &self,
         ctx: &Context,
     ) -> ockam_core::Result<InvitationOutgoingAccessControl> {
-        let ctx = ctx
-            .new_detached(
-                Address::random_tagged("InvitationOutgoingAccessControl"),
-                DenyAll,
-                DenyAll,
-            )
-            .await?;
+        let ctx = ctx.new_detached(
+            Address::random_tagged("InvitationOutgoingAccessControl"),
+            DenyAll,
+            DenyAll,
+        )?;
 
         Ok(InvitationOutgoingAccessControl {
             ctx,
@@ -169,10 +168,10 @@ pub struct InvitationIncomingAccessControl {
 impl IncomingAccessControl for InvitationIncomingAccessControl {
     async fn is_authorized(&self, relay_message: &RelayMessage) -> ockam_core::Result<bool> {
         if let Ok(msg_identity_id) =
-            IdentitySecureChannelLocalInfo::find_info(relay_message.local_message())
+            SecureChannelLocalInfo::find_info(relay_message.local_message())
         {
             self.invitation_access_control
-                .is_authorized(&msg_identity_id.their_identity_id())
+                .is_authorized(&msg_identity_id.their_identifier().into())
                 .await
         } else {
             Ok(false)
@@ -189,7 +188,7 @@ pub struct InvitationOutgoingAccessControl {
 #[async_trait]
 impl OutgoingAccessControl for InvitationOutgoingAccessControl {
     async fn is_authorized(&self, relay_message: &RelayMessage) -> ockam_core::Result<bool> {
-        let identifier = match Abac::get_outgoing_identifier(&self.ctx, relay_message).await? {
+        let identifier = match Abac::get_outgoing_identifier(&self.ctx, relay_message)? {
             Some(identifier) => identifier,
             None => {
                 debug!("identity identifier not found; access denied");

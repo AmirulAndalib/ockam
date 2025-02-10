@@ -66,9 +66,8 @@ pub use ockam_core::processor;
 /// may be changed in the future to a [`Worker`](crate::Worker)-specific macro.
 pub use ockam_core::worker;
 pub use ockam_core::{
-    allow, deny, errcode, route, Address, Any, AsyncTryClone, Encoded, Error, LocalMessage,
-    Mailbox, Mailboxes, Message, Processor, ProtocolId, Result, Route, Routed, TransportMessage,
-    Worker,
+    allow, deny, errcode, route, Address, Any, Encoded, Error, LocalMessage, Mailbox, Mailboxes,
+    Message, Processor, ProtocolId, Result, Route, Routed, TransportMessage, TryClone, Worker,
 };
 pub use ockam_identity as identity;
 // ---
@@ -87,25 +86,26 @@ pub mod tcp {
     pub use ockam_transport_tcp::{
         TcpConnection, TcpConnectionMode, TcpConnectionOptions, TcpInletOptions, TcpListener,
         TcpListenerInfo, TcpListenerOptions, TcpOutletOptions, TcpSenderInfo, TcpTransport,
-        TcpTransportExtension, TCP,
+        TcpTransportExtension, MAX_MESSAGE_SIZE, TCP,
     };
 }
 #[cfg(feature = "ockam_transport_udp")]
 /// UDP transport
 pub mod udp {
     pub use ockam_transport_udp::{
-        UdpBindArguments, UdpBindOptions, UdpPunctureNegotiation, UdpPunctureNegotiationListener,
-        UdpPunctureNegotiationListenerOptions, UdpTransport, UdpTransportExtension, UDP,
+        RendezvousClient, RendezvousService, UdpBind, UdpBindArguments, UdpBindOptions,
+        UdpPuncture, UdpPunctureNegotiation, UdpPunctureNegotiationListener,
+        UdpPunctureNegotiationListenerOptions, UdpTransport, UdpTransportExtension,
+        MAX_MESSAGE_SIZE, UDP,
     };
 }
 pub use relay_service::{RelayService, RelayServiceOptions};
 
 /// Transport
 pub mod transport {
-    #[cfg(feature = "std")]
-    pub use ockam_transport_core::resolve_peer;
-
-    pub use ockam_transport_core::{parse_socket_addr, HostnamePort, Transport};
+    pub use ockam_transport_core::{
+        parse_socket_addr, HostnamePort, SchemeHostnamePort, StaticHostnamePort, Transport,
+    };
 }
 
 // ---

@@ -4,6 +4,129 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.79.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Updated dependencies
+
+## 0.78.0 - 2025-01-09
+
+### Added
+
+- Introduce env variables to adjust transport performance
+- Improvements to portals commands arguments
+- Updated dependencies
+
+## 0.77.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Improve ockam udp transport implementation robustness
+- Updated dependencies
+
+## 0.76.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Updated dependencies
+
+## 0.75.0 - 2024-11-27
+
+### Added
+
+- Updated dependencies
+
+## 0.74.0 - 2024-11-12
+
+### Added
+
+- Updated dependencies
+
+## 0.73.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+## 0.72.0 - 2024-10-24
+
+### Added
+
+- Updated dependencies
+
+## 0.71.0 - 2024-10-23
+
+### Added
+
+- Updated dependencies
+
+## 0.70.0 - 2024-10-16
+
+### Added
+
+- Updated dependencies
+
+## 0.69.0 - 2024-10-11
+
+### Added
+
+- Updated dependencies
+
+## 0.68.0 - 2024-09-23
+
+### Added
+
+- Updated dependencies
+
+## 0.67.0 - 2024-08-14
+
+### Added
+
+- Updated dependencies
+
+## 0.66.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+## 0.65.0 - 2024-08-06
+
+### Added
+
+- `UDP` puncture improvements
+- Updated dependencies
+
+## 0.64.0 - 2024-07-29
+
+### Added
+
+- Implement `UDP` transport segmentation
+- Improve transport imports
+- Add healthcheck to `Rendezvous` server
+- Remove sync operations
+- Updated dependencies
+
+## 0.63.0 - 2024-07-03
+
+### Added
+
+- Display a malformed transport address
+- Updated dependencies
+
+## 0.62.0 - 2024-07-01
+
+### Added
+
+- `UDP` updates
+- Change tcp protocol serialization
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
 ## 0.61.0 - 2024-06-25
 
 ### Added

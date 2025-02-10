@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 use core::fmt::Write;
-use std::net::SocketAddr;
 
 use clap::Args;
 use console::Term;
@@ -12,7 +11,7 @@ use ockam_api::nodes::BackgroundNodeClient;
 use ockam_api::terminal::{Terminal, TerminalStream};
 use ockam_api::{address::extract_address_value, nodes::models::portal::OutletStatus};
 use ockam_core::api::Request;
-use ockam_core::AsyncTryClone;
+use ockam_core::TryClone;
 use ockam_multiaddr::MultiAddr;
 
 use crate::tcp::util::alias_parser;
@@ -46,21 +45,16 @@ pub struct ShowCommand {
 impl Command for ShowCommand {
     const NAME: &'static str = "tcp-outlet show";
 
-    async fn async_run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
-        Ok(ShowTui::run(
-            ctx.async_try_clone().await.into_diagnostic()?,
-            opts,
-            self.clone(),
-        )
-        .await?)
+    async fn run(self, ctx: &Context, opts: CommandGlobalOpts) -> crate::Result<()> {
+        Ok(ShowTui::run(ctx.try_clone().into_diagnostic()?, opts, self.clone()).await?)
     }
 }
 
 #[derive(Debug, Serialize)]
 struct OutletInformation {
     node_name: String,
-    worker_addr: MultiAddr,
-    socket_addr: SocketAddr,
+    worker_address: MultiAddr,
+    to: String,
 }
 
 impl Output for OutletInformation {
@@ -68,8 +62,8 @@ impl Output for OutletInformation {
         let mut w = String::new();
         write!(w, "Outlet")?;
         write!(w, "\n  On Node: {}", self.node_name)?;
-        write!(w, "\n  From address: {}", self.worker_addr)?;
-        write!(w, "\n  To TCP server: {}", self.socket_addr)?;
+        write!(w, "\n  From address: {}", self.worker_address)?;
+        write!(w, "\n  To TCP server: {}", self.to)?;
         Ok(w)
     }
 }
@@ -88,7 +82,7 @@ impl ShowTui {
         mut cmd: ShowCommand,
     ) -> miette::Result<()> {
         let node = BackgroundNodeClient::create(&ctx, &opts.state, &cmd.at).await?;
-        cmd.at = Some(node.node_name());
+        cmd.at = Some(node.node_name().to_string());
 
         let tui = Self {
             ctx,
@@ -142,14 +136,14 @@ impl ShowCommandTui for ShowTui {
             .ask(&self.ctx, Request::get(format!("/node/outlet/{item_name}")))
             .await?;
         let info = OutletInformation {
-            node_name: self.node.node_name(),
-            worker_addr: outlet_status.worker_address().into_diagnostic()?,
-            socket_addr: outlet_status.socket_addr,
+            node_name: self.node.node_name().to_string(),
+            worker_address: outlet_status.worker_route().into_diagnostic()?,
+            to: outlet_status.to.to_string(),
         };
         self.terminal()
             .stdout()
             .plain(info.item()?)
-            .json(serde_json::json!(info))
+            .json_obj(info)?
             .write_line()?;
         Ok(())
     }

@@ -4,7 +4,6 @@ use ockam_core::compat::sync::Arc;
 use ockam_core::flow_control::FlowControls;
 #[cfg(feature = "std")]
 use ockam_core::OpenTelemetryContext;
-use ockam_core::{Address, AllowAll, Mailbox, Mailboxes, LATEST_PROTOCOL_VERSION};
 
 /// A minimal worker implementation that does nothing
 pub struct NullWorker;
@@ -45,6 +44,15 @@ impl NodeBuilder {
     pub fn no_logging(self) -> Self {
         Self {
             logging: false,
+            exit_on_panic: self.exit_on_panic,
+            rt: self.rt,
+        }
+    }
+
+    /// Enable logging on this node
+    pub fn with_logging(self, logging: bool) -> Self {
+        Self {
+            logging,
             exit_on_panic: self.exit_on_panic,
             rt: self.rt,
         }
@@ -103,11 +111,6 @@ impl NodeBuilder {
             {
                 Arc::new(
                     tokio::runtime::Builder::new_multi_thread()
-                        // Using a lower stack size than the default (2MB),
-                        // this helps improve the cache hit ratio and reduces
-                        // the memory footprint.
-                        // Can be increased if needed.
-                        .thread_stack_size(1024 * 1024)
                         .enable_all()
                         .build()
                         .expect("cannot initialize the tokio runtime"),
@@ -116,21 +119,24 @@ impl NodeBuilder {
             #[cfg(not(feature = "std"))]
             Arc::new(Runtime::new().expect("cannot initialize the tokio runtime"))
         });
-        let mut exe = Executor::new(rt.clone(), &flow_controls);
-        let addr: Address = "app".into();
+
+        #[cfg(feature = "watchdog")]
+        {
+            let watchdog = crate::watchdog::TokioRuntimeWatchdog::new();
+            watchdog.start_watchdog_loop(&rt);
+        }
+
+        let handle = rt.handle().clone();
+        let exe = Executor::new(rt, &flow_controls);
+
+        let router = exe.router().upgrade().unwrap();
 
         // The root application worker needs a mailbox and relay to accept
         // messages from workers, and to buffer incoming transcoded data.
-        let (ctx, sender, _) = Context::new(
-            LATEST_PROTOCOL_VERSION,
-            rt.handle().clone(),
-            exe.sender(),
-            Mailboxes::new(
-                Mailbox::new(addr, Arc::new(AllowAll), Arc::new(AllowAll)),
-                vec![],
-            ),
-            None,
-            Default::default(),
+
+        let (ctx, sender, _) = Context::create_app_context(
+            handle.clone(),
+            Arc::downgrade(&router),
             &flow_controls,
             #[cfg(feature = "std")]
             OpenTelemetryContext::current(),
@@ -139,7 +145,15 @@ impl NodeBuilder {
         debugger::log_inherit_context("NODE", &ctx, &ctx);
 
         // Register this mailbox handle with the executor
-        exe.initialize_system("app", sender);
+        router
+            .add_worker(
+                ctx.mailboxes(),
+                sender,
+                true,
+                Default::default(),
+                ctx.mailbox_count(),
+            )
+            .expect("router initialization failed");
 
         // Then return the root context and executor
         (ctx, exe)
@@ -156,7 +170,7 @@ fn setup_tracing() {
         use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            let filter = EnvFilter::try_from_env("OCKAM_LOG").unwrap_or_else(|_| {
+            let filter = EnvFilter::try_from_env("OCKAM_LOG_LEVEL").unwrap_or_else(|_| {
                 EnvFilter::default()
                     .add_directive(LevelFilter::INFO.into())
                     .add_directive("ockam_node=info".parse().unwrap())

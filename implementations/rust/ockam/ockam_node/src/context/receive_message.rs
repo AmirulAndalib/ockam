@@ -61,7 +61,7 @@ impl Context {
     pub(crate) async fn receiver_next(&mut self) -> Result<Option<RelayMessage>> {
         loop {
             let relay_msg = if let Some(msg) = self.receiver.recv().await.map(|msg| {
-                trace!("{}: received new message!", self.address());
+                trace!(address=%self.primary_address(), "received new message!");
 
                 // First we update the mailbox fill metrics
                 self.mailbox_count.fetch_sub(1, Ordering::Acquire);
@@ -130,7 +130,7 @@ impl Context {
             MessageWait::Timeout(timeout_duration) => {
                 timeout(timeout_duration, async { self.next_from_mailbox().await })
                     .await
-                    .map_err(|e| NodeError::Data.with_elapsed(e))?
+                    .map_err(|_| NodeError::Data.with_timeout(timeout_duration))?
             }
             MessageWait::Blocking => self.next_from_mailbox().await,
         }

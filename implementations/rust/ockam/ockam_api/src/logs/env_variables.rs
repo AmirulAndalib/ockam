@@ -2,9 +2,6 @@
 /// LOGGING CONFIGURATION
 ///
 
-/// DEPRECATED! Accepted values, see LogLevel. For example: trace, debug, info
-pub(crate) const OCKAM_LOG: &str = "OCKAM_LOG";
-
 /// Decides if logs should be created. Accepted values, see FromString<bool>. For example; true, false, 1, 0
 pub(crate) const OCKAM_LOGGING: &str = "OCKAM_LOGGING";
 
@@ -24,7 +21,7 @@ pub(crate) const OCKAM_LOG_MAX_FILES: &str = "OCKAM_LOG_MAX_FILES";
 /// Log format. Accepted values, see LogFormat. For example: pretty, json, default
 pub(crate) const OCKAM_LOG_FORMAT: &str = "OCKAM_LOG_FORMAT";
 
-/// Filter for log messages based on crate names. Accepted values: 'all', 'default', 'comma-separated strings'. For example: ockam_core,ockam_api
+/// Filter for log messages based on crate names. Accepted values: 'all' or 'comma-separated strings'. For example: ockam_core,ockam_api
 pub(crate) const OCKAM_LOG_CRATES_FILTER: &str = "OCKAM_LOG_CRATES_FILTER";
 
 ///
@@ -32,20 +29,22 @@ pub(crate) const OCKAM_LOG_CRATES_FILTER: &str = "OCKAM_LOG_CRATES_FILTER";
 ///
 
 /// Decides if spans and log records should be created and exported. Accepted values, see BooleanVar. For example; true, false, 1, 0
+pub(crate) const OCKAM_TELEMETRY_EXPORT: &str = "OCKAM_TELEMETRY_EXPORT";
+
+/// Deprecated, use OCKAM_TELEMETRY_EXPORT instead
 pub(crate) const OCKAM_OPENTELEMETRY_EXPORT: &str = "OCKAM_OPENTELEMETRY_EXPORT";
 
 /// Decides if spans and log records should be exported via the project exporter portal. Accepted values, see BooleanVar. For example; true, false, 1, 0
-pub(crate) const OCKAM_OPENTELEMETRY_EXPORT_VIA_PORTAL: &str =
-    "OCKAM_OPENTELEMETRY_EXPORT_VIA_PORTAL";
+pub(crate) const OCKAM_TELEMETRY_EXPORT_VIA_PORTAL: &str = "OCKAM_TELEMETRY_EXPORT_VIA_PORTAL";
 
 /// Boolean set to true if the current user is an Ockam developer
-pub(crate) const OCKAM_DEVELOPER: &str = "OCKAM_DEVELOPER";
+pub const OCKAM_DEVELOPER: &str = "OCKAM_DEVELOPER";
 
 /// If this variable is true, print statements will debug the setting of the OpenTelemetry export
 pub(crate) const OCKAM_OPENTELEMETRY_EXPORT_DEBUG: &str = "OCKAM_OPENTELEMETRY_EXPORT_DEBUG";
 
 ///
-/// OPENTELEMETRY COLLECTOR ENDPOINT CONFIGURATION
+/// TELEMETRY COLLECTOR ENDPOINT CONFIGURATION
 ///
 
 /// URL for the OpenTelemetry collector. Accepted values, see UrlVar. For example: http://127.0.0.1:4317
@@ -53,26 +52,26 @@ pub(crate) const OCKAM_OPENTELEMETRY_ENDPOINT: &str = "OCKAM_OPENTELEMETRY_ENDPO
 
 /// Timeout for trying to connect to the endpoint before deciding that exporting traces
 /// from a foreground command will not be possible. For example: 500ms
-pub(crate) const OCKAM_FOREGROUND_OPENTELEMETRY_ENDPOINT_CONNECTION_TIMEOUT: &str =
-    "OCKAM_FOREGROUND_OPENTELEMETRY_ENDPOINT_CONNECTION_TIMEOUT";
+pub(crate) const OCKAM_FOREGROUND_TELEMETRY_ENDPOINT_CONNECTION_TIMEOUT: &str =
+    "OCKAM_FOREGROUND_TELEMETRY_ENDPOINT_CONNECTION_TIMEOUT";
 
 /// Timeout for trying to connect to the endpoint before deciding that exporting traces
 /// from a background node will not be possible. Accepted values, see DurationVar. For example: 500ms
-pub(crate) const OCKAM_BACKGROUND_OPENTELEMETRY_ENDPOINT_CONNECTION_TIMEOUT: &str =
-    "OCKAM_BACKGROUND_OPENTELEMETRY_ENDPOINT_CONNECTION_TIMEOUT";
+pub(crate) const OCKAM_BACKGROUND_TELEMETRY_ENDPOINT_CONNECTION_TIMEOUT: &str =
+    "OCKAM_BACKGROUND_TELEMETRY_ENDPOINT_CONNECTION_TIMEOUT";
 
 ///
-/// OPENTELEMETRY COLLECTOR EXPORT CONFIGURATION
+/// TELEMETRY COLLECTOR EXPORT CONFIGURATION
 ///
 
-/// Name of the background node used to export OpenTelemetry traces
-pub(crate) const OCKAM_OPENTELEMETRY_NODE_NAME: &str = "ockam-opentelemetry-inlet";
+/// Name of the background node used to export Telemetry traces
+pub(crate) const OCKAM_TELEMETRY_NODE_NAME: &str = "ockam-telemetry-inlet";
 
-/// Name of the inlet used to export OpenTelemetry traces
-pub(crate) const OCKAM_OPENTELEMETRY_INLET_ALIAS: &str = "ockam-opentelemetry";
+/// Name of the inlet used to export Telemetry traces
+pub(crate) const OCKAM_TELEMETRY_INLET_ALIAS: &str = "ockam-telemetry";
 
-/// Name of the relay used to export OpenTelemetry traces
-pub(crate) const OCKAM_OPENTELEMETRY_RELAY_NAME: &str = "ockam-opentelemetry";
+/// Name of the relay used to export Telemetry traces
+pub(crate) const OCKAM_TELEMETRY_RELAY_NAME: &str = "ockam-telemetry";
 
 /// Timeout for trying to export spans to the endpoint.
 /// Accepted values, see DurationVar. For example: 500ms
@@ -111,17 +110,23 @@ pub(crate) const OCKAM_SPAN_EXPORT_QUEUE_SIZE: &str = "OCKAM_SPAN_EXPORT_QUEUE_S
 pub(crate) const OCKAM_LOG_EXPORT_QUEUE_SIZE: &str = "OCKAM_LOG_EXPORT_QUEUE_SIZE";
 
 /// Maximum time for sending a log batch and not waiting for a response when running
-/// a foreground command and using a portal to export log records. For example: 200ms
-pub(crate) const OCKAM_FOREGROUND_LOG_EXPORT_PORTAL_CUTOFF: &str =
-    "OCKAM_FOREGROUND_LOG_EXPORT_PORTAL_CUTOFF";
+/// a foreground command export log records. For example: 200ms
+pub(crate) const OCKAM_FOREGROUND_LOG_EXPORT_CUTOFF: &str = "OCKAM_FOREGROUND_LOG_EXPORT_CUTOFF";
 
 /// Maximum time for sending a span batch and not waiting for a response when running
-/// a foreground command and using a portal to export span batches. For example: 200ms
-pub(crate) const OCKAM_FOREGROUND_SPAN_EXPORT_PORTAL_CUTOFF: &str =
-    "OCKAM_FOREGROUND_SPAN_EXPORT_PORTAL_CUTOFF";
+/// a foreground command to export span batches. For example: 200ms
+pub(crate) const OCKAM_FOREGROUND_SPAN_EXPORT_CUTOFF: &str = "OCKAM_FOREGROUND_SPAN_EXPORT_CUTOFF";
+
+/// Maximum time for sending a log batch and not waiting for a response when running
+/// a background command to export log records. For example: 200ms
+pub(crate) const OCKAM_BACKGROUND_LOG_EXPORT_CUTOFF: &str = "OCKAM_BACKGROUND_LOG_EXPORT_CUTOFF";
+
+/// Maximum time for sending a span batch and not waiting for a response when running
+/// a background command to export span batches. For example: 200ms
+pub(crate) const OCKAM_BACKGROUND_SPAN_EXPORT_CUTOFF: &str = "OCKAM_BACKGROUND_SPAN_EXPORT_CUTOFF";
 
 ///
-/// OPENTELEMETRY COLLECTOR ERRORS CONFIGURATION
+/// TELEMETRY COLLECTOR ERRORS CONFIGURATION
 ///
 
 /// Global error handler for the tracing crate

@@ -14,8 +14,8 @@ use ockam_transport_core::Transport;
 use crate::models::CredentialAndPurposeKey;
 use crate::utils::now;
 use crate::{
-    CachedCredentialRetriever, Identifier, RemoteCredentialRetrieverInfo, SecureChannels,
-    SecureClient, TimestampInSeconds, DEFAULT_CREDENTIAL_CLOCK_SKEW_GAP,
+    get_default_timeout, CachedCredentialRetriever, Identifier, RemoteCredentialRetrieverInfo,
+    SecureChannels, SecureClient, TimestampInSeconds, DEFAULT_CREDENTIAL_CLOCK_SKEW_GAP,
 };
 
 /// This is the default interval before a credential expiration when we'll query for
@@ -28,9 +28,6 @@ pub const DEFAULT_MIN_REFRESH_CREDENTIAL_INTERVAL: Duration = Duration::from_sec
 
 /// Default timeout for requesting credential from the authority
 pub const DEFAULT_CREDENTIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// Default timeout for creating secure channel to the authority
-pub const DEFAULT_CREDENTIAL_SECURE_CHANNEL_CREATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Start refresh in the background before it expires
 pub const DEFAULT_CREDENTIAL_PROACTIVE_REFRESH_GAP: TimestampInSeconds = TimestampInSeconds(60);
@@ -54,8 +51,8 @@ pub struct RemoteCredentialRetrieverTimingOptions {
 impl Default for RemoteCredentialRetrieverTimingOptions {
     fn default() -> Self {
         Self {
-            request_timeout: DEFAULT_CREDENTIAL_REQUEST_TIMEOUT,
-            secure_channel_creation_timeout: DEFAULT_CREDENTIAL_SECURE_CHANNEL_CREATION_TIMEOUT,
+            request_timeout: get_default_timeout(),
+            secure_channel_creation_timeout: get_default_timeout(),
             min_refresh_interval: DEFAULT_MIN_REFRESH_CREDENTIAL_INTERVAL,
             proactive_refresh_gap: DEFAULT_PROACTIVE_REFRESH_CREDENTIAL_TIME_GAP,
             clock_skew_gap: DEFAULT_CREDENTIAL_CLOCK_SKEW_GAP,
@@ -259,20 +256,17 @@ impl RemoteCredentialRetriever {
     /// into EncryptorWorker's own internal mailbox which it will use as a trigger to get a new
     /// credential and present it to the other side.
     fn schedule_credentials_refresh_impl(&self, refresh_in: Duration, is_retry: bool) {
-        let is_retry_str = if is_retry { " retry " } else { " " };
-        info!(
-            "Scheduling background credentials refresh{}from {} in {} seconds",
-            is_retry_str,
-            self.issuer_info.issuer,
-            refresh_in.as_secs()
-        );
-
+        debug!(issuer=%self.issuer_info.issuer, is_retry,
+            "Scheduling background credentials refresh in {} seconds",
+            refresh_in.as_secs());
         self.request_new_credential_in_background(refresh_in, is_retry);
     }
 }
 
 impl RemoteCredentialRetriever {
     async fn get_new_credential(&self) -> Result<()> {
+        debug!(subject=%self.subject, issuer=%self.issuer_info.issuer,
+            "retrieving a new credential");
         let cache = self
             .secure_channels
             .identities
@@ -289,7 +283,7 @@ impl RemoteCredentialRetriever {
             self.timing_options.request_timeout,
         );
 
-        let credential = client
+        let credential: CredentialAndPurposeKey = client
             .ask(
                 &self.ctx,
                 &self.issuer_info.service_address,
@@ -301,10 +295,23 @@ impl RemoteCredentialRetriever {
             .await?
             .success()?;
 
-        info!(
-            "Retrieved a new credential for {} from {}",
-            self.subject, &self.issuer_info.route
-        );
+        let credential_data = credential.get_credential_data()?;
+        let attributes = credential_data.get_attributes_display();
+        let purpose_key_data = credential.purpose_key_attestation.get_attestation_data()?;
+        info! {
+            subject = %self.subject,
+            %attributes,
+            schema = %credential_data.subject_attributes.schema.0,
+            created_at = %credential_data.created_at,
+            expires_at = %credential_data.expires_at,
+            "retrieved credential"
+        }
+        debug! {
+            subject = %purpose_key_data.subject,
+            created_at = %purpose_key_data.created_at,
+            expires_at = %purpose_key_data.expires_at,
+            "retrieved credential - purpose key attestation"
+        }
 
         let credential_and_purpose_key_data = self
             .secure_channels
@@ -319,7 +326,7 @@ impl RemoteCredentialRetriever {
             .await?;
         let expires_at = credential_and_purpose_key_data.credential_data.expires_at;
 
-        trace!("The retrieved credential is valid");
+        trace!("the retrieved credential is valid");
 
         *self.last_presented_credential.write().unwrap() = Some(LastPresentedCredential {
             credential: credential.clone(),
@@ -337,10 +344,8 @@ impl RemoteCredentialRetriever {
             .await;
 
         if let Some(err) = caching_res.err() {
-            error!(
-                "Error caching credential for {} from {}. Err={}",
-                self.subject, &self.issuer_info.issuer, err
-            );
+            error!(subject=%self.subject, issuer=%self.issuer_info.issuer, %err,
+                "error caching credential");
         }
 
         self.notify_subscribers().await?;
@@ -354,29 +359,20 @@ impl RemoteCredentialRetriever {
     fn request_new_credential_in_background(&self, wait: Duration, is_retry: bool) {
         let s = self.clone();
         ockam_node::spawn(async move {
-            let is_retry_str = if is_retry { " retry " } else { " " };
-            info!(
-                "Scheduled background credentials refresh{}from {} in {} seconds",
-                is_retry_str,
-                s.issuer_info.issuer,
-                wait.as_secs()
-            );
+            info!(issuer=%s.issuer_info.issuer, is_retry,
+                "scheduled background credentials refresh in {} seconds",
+                wait.as_secs());
             s.ctx
                 .sleep_long_until(*now().unwrap() + wait.as_secs())
                 .await;
-            info!(
-                "Executing background credentials refresh{}from {}",
-                is_retry_str, s.issuer_info.issuer,
-            );
-            let res = s.get_new_credential().await;
-
-            if let Some(err) = res.err() {
-                error!(
-                    "Error refreshing credential for {} in the background: {}",
-                    s.subject, err
-                );
-
+            debug!(issuer=%s.issuer_info.issuer, is_retry,
+                "executing background credentials refresh");
+            if let Some(err) = s.get_new_credential().await.err() {
+                error!(subject=%s.subject, is_retry, %err,
+                    "error refreshing credential in the background");
                 s.schedule_credentials_refresh(now().unwrap(), true);
+            } else {
+                debug!(issuer=%s.issuer_info.issuer, is_retry, "credentials refreshed");
             }
         });
     }

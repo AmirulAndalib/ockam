@@ -4,6 +4,303 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.90.0 - 2025-01-20
+
+### Added
+
+- Rewrite `ockam_node`
+- Update the postgres schema
+- Make sure that reset can not remove postgres data
+- Isolate member data by authority
+- Add binary to compile branded command binaries
+- Update the legacy authority identity name
+- Updated dependencies
+
+### Changed
+
+- Rename cloud module to orchestrator
+
+## 0.89.0 - 2025-01-09
+
+### Added
+
+- Introduce env variables to adjust transport performance
+- Simplify `node create` execution
+- Improve logs for relay creation
+- Improve logs for tcp portals creation
+- Add a custom log format to change the fields order
+- Session replacer sends notifications on session lost/replaced
+- Improvements to portals commands arguments
+- Updated dependencies
+
+### Changed
+
+- Extract `OCKAM_SQLITE_IN_MEMORY` env var usage up to the cli state initialization
+- Rename telemetry env vars
+
+## 0.88.0 - 2024-12-12
+
+### Added
+
+- Add `UDP` support to nodes and multiaddr. refactor multiaddr
+- Enable auto-retry on all repositories
+- Updated dependencies
+
+### Changed
+
+- Make the auto-retry an implementation detail of repositories
+
+### Fixed
+
+- Update tests using the `ENROLLMENT_TICKET` env var
+
+## 0.87.0 - 2024-12-04
+
+### Added
+
+- Avoiding memory fragmentation by reducing allocations
+- Increased portal throughput by increasing payload size
+- Updated dependencies
+
+## 0.86.0 - 2024-11-30
+
+### Added
+
+- Reduce the api versions to the supported range
+- Updated dependencies
+
+## 0.85.0 - 2024-11-27
+
+### Added
+
+- Return new ticket format in `project ticket`
+- Node's http server is enabled by default
+- Remove last usages of `OCKAM_LOG` env var
+- Simplify command node shutdown
+- Add env. variables for auth0
+- Adjust `enroll` logic and output for the new subscription plans
+- Updated dependencies
+
+### Fixed
+
+- `project enroll` support for json encoded tickets
+
+### Removed
+
+- Remove the dev. authenticator endpoint
+
+## 0.84.0 - 2024-11-12
+
+### Added
+
+- Support json output in `project ticket`
+- `project ticket` show warning when using high values for ticket duration/usage
+- Tie each tcp connection inside portal to an `Identifier`
+- Improve delete behavior on different commands
+- Rename ebpf portals -> privileged portals
+- Updated dependencies
+
+### Changed
+
+- Bump sysinfo from 0.31.4 to 0.32.0
+
+### Fixed
+
+- Influxdb and tcp inlets delay the alias random value initialization to prevent collisions
+- Make sure that traces are exported when a command is executed
+- Force flush the traces later
+- Error chain is kept in ockam_command crate
+
+## 0.83.0 - 2024-10-25
+
+### Added
+
+- Updated dependencies
+
+### Fixed
+
+- Use the proper tls configuration to export logs and traces
+
+## 0.82.0 - 2024-10-24
+
+### Added
+
+- Pretty json output by default, and colored if possible
+- Add more granular scopes for command logs
+- Allow relay connection failure without failing relay creation
+- Updated dependencies
+
+## 0.81.0 - 2024-10-23
+
+### Added
+
+- Switching to sqlite wal mode for better concurrency
+- Updated dependencies
+
+### Fixed
+
+- Auto retry `SQLite` queries and transactions when the failure is a deadlock
+- Avoid panicking when the non-persistent node cannot be deleted
+
+## 0.80.0 - 2024-10-21
+
+### Added
+
+- Change behavior of how nodes' processes are stopped
+- Improvements to commands outputs
+- Return enrollment ticket hex-encoded
+- Updated dependencies
+
+## 0.79.0 - 2024-10-16
+
+### Added
+
+- `eBPF` portal updates:
+- Updated dependencies
+
+### Fixed
+
+- `project enroll` should not try to fetch project data from orchestrator
+
+## 0.78.0 - 2024-10-15
+
+### Added
+
+- Update influxdb token lease manager response api
+- More options on token management for influxdb_outlet
+- Simplify influxdb outlet deployment options
+- Compact enrollment ticket encoded format
+- Implement a more efficient function to delete all project members at once
+- Updated dependencies
+
+### Fixed
+
+- Generate the enrollment ticket using the project route, and not its id
+
+## 0.77.0 - 2024-09-23
+
+### Added
+
+- Add a value parser for change histories
+- Added `TLS` inlet support
+- Implement influxdb token lessor service
+- Update default rendezvous server address
+- Influxdb inlet/outlet that attach authorization token
+- Improve output for lease commands
+- Refactor influxdb api client to better handle error responses
+- Implementation of reliable `TCP` portals
+- Add reliable `TCP` portals to `ockam_api`&`ockam_command`
+- Improve ux of influxdb portal commands
+- Updated dependencies
+
+### Changed
+
+- Bump opentelemetry-appender-tracing from 0.4.0 to 0.5.0
+- Bump sysinfo from 0.30.13 to 0.31.4
+
+### Fixed
+
+- Graceful stop of a node in the command
+
+## 0.76.0 - 2024-08-14
+
+### Added
+
+- Heavy kafka refactoring, moved portal interceptor from `api` to `tcp` crate
+- Kafka cleanups
+- Added the possibility to encrypt specific fields in a kafka `JSON` record
+- Updated dependencies
+
+## 0.75.0 - 2024-08-12
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Do not enforce the existence of project and authority identities
+
+## 0.74.0 - 2024-08-06
+
+### Added
+
+- Rework `Session`s
+- Crud for space and project admins
+- The config of `node create` accepts an `identity`
+- Updated dependencies
+
+### Changed
+
+- Move shared projects modifications logic into repository
+
+### Fixed
+
+- Make sure that there is only one space max marked as default
+- When refreshing projects, store first the admin projects
+- Use lowercase email in query filters
+- Email list binding in project query
+- Set default project/space/user
+
+## 0.73.0 - 2024-07-29
+
+### Added
+
+- Add the possibility to configure the default client timeout
+- Display the error when enrolling with a ticket fails
+- Wait for the project to be ready before creating an authority client
+- Set the default timeout on the background node client
+- Don't interpret a bad request status as already enrolled
+- Move rendezvous_server to `ockam rendezvous-server start`
+- Implicitly resolve outlet addresses during connection
+- Converted socket addresses to hostnames in command
+- Remove sync operations
+- Log commands by default to a file
+- Hide actual values for `Token` and `OneTimeCode` in `Debug`
+- Increase opentelemetry queue sizes
+- Adjust timeouts
+- Report more detailed errors
+- Stop a previous medic before starting a new one
+- Integrate space's subscription data in command
+- Handle duplicates in project's egress_allow_list field
+- Updated dependencies
+
+### Changed
+
+- Always log messages from the terminal if logging is true
+
+### Fixed
+
+- Make sure that only one project is the default one
+
+## 0.72.0 - 2024-07-03
+
+### Added
+
+- Updated dependencies
+
+### Changed
+
+- Use a published dependency for the patched sqlx library
+- Improve output of `project enroll` and `credential` commands
+
+## 0.71.0 - 2024-07-01
+
+### Added
+
+- Improve transport imports
+- Integrate `UDP` puncture into `ockam_api`
+- Add delete and list commands for kafka-outlet
+- Use the any driver for sqlx to add support for postgres
+- Change tcp protocol serialization
+- Optimize cbor encoding by preallocating memory
+- Updated dependencies
+
+### Changed
+
+- `project-member` commands, and adds the `show` command
+- `kafka-*` commands
+
 ## 0.70.0 - 2024-06-25
 
 ### Added

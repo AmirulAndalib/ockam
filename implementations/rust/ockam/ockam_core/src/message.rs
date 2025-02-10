@@ -214,30 +214,30 @@ impl<M: Message> Routed<M> {
 
     /// Return a copy of the message address.
     #[inline]
-    pub fn msg_addr(&self) -> Address {
-        self.msg_addr.clone()
+    pub fn msg_addr(&self) -> &Address {
+        &self.msg_addr
     }
 
     /// True sender of the message
     #[inline]
-    pub fn src_addr(&self) -> Address {
-        self.src_addr.clone()
+    pub fn src_addr(&self) -> &Address {
+        &self.src_addr
     }
 
     /// Return a copy of the onward route for the wrapped message.
     #[inline]
-    pub fn onward_route(&self) -> Route {
+    pub fn onward_route(&self) -> &Route {
         self.local_msg.onward_route()
     }
 
     /// Return a copy of the full return route for the wrapped message.
     #[inline]
-    pub fn return_route(&self) -> Route {
+    pub fn return_route(&self) -> &Route {
         self.local_msg.return_route()
     }
     /// Return a copy of the sender address for the wrapped message.
     #[inline]
-    pub fn sender(&self) -> Result<Address> {
+    pub fn sender(&self) -> Result<&Address> {
         self.local_msg.return_route().recipient()
     }
 
@@ -262,7 +262,7 @@ impl<M: Message> Routed<M> {
     /// Return a reference to the underlying transport message's binary payload.
     #[inline]
     pub fn payload(&self) -> &[u8] {
-        self.local_msg.payload_ref()
+        self.local_msg.payload()
     }
 
     /// Consume the message wrapper and return the underlying transport message's binary payload.

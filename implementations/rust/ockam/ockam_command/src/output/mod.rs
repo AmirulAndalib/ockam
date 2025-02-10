@@ -1,7 +1,7 @@
 use core::fmt;
 use std::fmt::Formatter;
 
-use minicbor::Encode;
+use minicbor::{CborLen, Encode};
 use serde::{Serialize, Serializer};
 
 use ockam::identity::models::{
@@ -195,13 +195,13 @@ impl fmt::Display for PurposeKeyDisplay {
     }
 }
 
-#[derive(Encode)]
+#[derive(Encode, CborLen)]
 #[cbor(transparent)]
 pub struct CredentialAndPurposeKeyDisplay(#[n(0)] pub CredentialAndPurposeKey);
 
 impl Output for CredentialAndPurposeKeyDisplay {
     fn item(&self) -> ockam_api::Result<String> {
-        Ok(format!("{}", self))
+        Ok(self.padded_display())
     }
 }
 
@@ -234,7 +234,7 @@ impl fmt::Display for IdentifierDisplay {
 
 impl Output for IdentifierDisplay {
     fn item(&self) -> ockam_api::Result<String> {
-        Ok(self.to_string())
+        Ok(self.padded_display())
     }
 }
 
@@ -278,7 +278,7 @@ impl fmt::Display for IdentityDisplay {
 
 impl Output for IdentityDisplay {
     fn item(&self) -> ockam_api::Result<String> {
-        Ok(format!("{}", self))
+        Ok(self.padded_display())
     }
 }
 

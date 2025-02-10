@@ -1,13 +1,13 @@
 use core::str::FromStr;
-
 use sqlx::*;
+use std::sync::Arc;
 
+use crate::cli_state::{IdentitiesRepository, NamedIdentity};
 use ockam::identity::Identifier;
 use ockam_core::async_trait;
 use ockam_core::Result;
+use ockam_node::database::AutoRetry;
 use ockam_node::database::{Boolean, FromSqlxError, SqlxDatabase, ToVoid};
-
-use crate::cli_state::{IdentitiesRepository, NamedIdentity};
 
 /// Implementation of [`IdentitiesRepository`] trait based on an underlying database
 /// using sqlx as its API, and Sqlite as its driver
@@ -21,6 +21,15 @@ impl IdentitiesSqlxDatabase {
     pub fn new(database: SqlxDatabase) -> Self {
         debug!("create a repository for identities");
         Self { database }
+    }
+
+    /// Create a repository
+    pub fn make_repository(database: SqlxDatabase) -> Arc<dyn IdentitiesRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database)))
+        } else {
+            Arc::new(Self::new(database))
+        }
     }
 
     /// Create a new in-memory database
@@ -123,6 +132,15 @@ impl IdentitiesRepository for IdentitiesSqlxDatabase {
         } else {
             Ok(None)
         }
+    }
+
+    async fn update_name(&self, identifier: &Identifier, name: &str) -> Result<()> {
+        query("UPDATE named_identity SET name = $1 WHERE identifier = $2")
+            .bind(name)
+            .bind(identifier)
+            .execute(&*self.database.pool)
+            .await
+            .void()
     }
 
     async fn get_identifier(&self, name: &str) -> Result<Option<Identifier>> {
@@ -386,6 +404,28 @@ mod tests {
                 .await?;
             let names: Vec<String> = result.iter().map(|i| i.name()).collect();
             assert_eq!(names, vec!["name1", "name3"]);
+
+            Ok(())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_update_name() -> Result<()> {
+        with_dbs(|db| async move {
+            let repository: Arc<dyn IdentitiesRepository> =
+                Arc::new(IdentitiesSqlxDatabase::new(db));
+
+            // A name can be associated to an identity
+            let identifier1 = create_identity().await?;
+            repository
+                .store_named_identity(&identifier1, "name1", "vault1")
+                .await?;
+
+            repository.update_name(&identifier1, "new-name1").await?;
+
+            let result = repository.get_named_identity("new-name1").await?;
+            assert_eq!(result.map(|i| i.name()), Some("new-name1".to_string()));
 
             Ok(())
         })

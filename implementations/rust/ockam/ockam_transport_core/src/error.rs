@@ -1,14 +1,15 @@
 use ockam_core::{
     compat::io,
+    compat::string::String,
     errcode::{Kind, Origin},
     Error,
 };
 
 /// A Transport worker specific error type
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransportError {
     /// Failed to send a malformed message
-    SendBadMessage = 1,
+    SendBadMessage,
     /// Failed to receive a malformed message
     RecvBadMessage,
     /// Failed to bind to the desired socket
@@ -24,7 +25,7 @@ pub enum TransportError {
     /// Failed to route to an unknown recipient
     UnknownRoute,
     /// Failed to parse the socket address
-    InvalidAddress,
+    InvalidAddress(String),
     /// Failed to read message (buffer exhausted) or failed to send it (size is too big)
     Capacity,
     /// Failed to encode message
@@ -40,7 +41,47 @@ pub enum TransportError {
     InvalidRouterResponseType,
     /// Excessive length of header, possible DoS attack
     /// https://github.com/advisories/GHSA-9mcr-873m-xcxp
-    AttackAttmept,
+    AttackAttempt,
+    /// Invalid protocol version
+    InvalidProtocolVersion,
+    /// Message is longer than allowed
+    MessageLengthExceeded,
+    /// Should not happen
+    EncodingInternalError,
+    /// Can't read from RawSocket
+    RawSocketRead(String),
+    /// Can't write to RawSocket
+    RawSocketWrite(String),
+    /// Can't create RawSocket
+    RawSocketCreation(String),
+    /// Couldn't redirect packet to corresponding Inlet
+    RawSocketRedirectToInlet,
+    /// Couldn't redirect packet to corresponding Outlet
+    RawSocketRedirectToOutlet,
+    /// Couldn't read network interfaces
+    ReadingNetworkInterfaces(i32),
+    /// Error while parsing IPv4 packet
+    ParsingHeaders(String),
+    /// Expected IPv4 address instead of IPv6
+    ExpectedIPv4Address,
+    /// Error adding Inlet port to the eBPF map
+    AddingInletPort(String),
+    /// Error adding Outlet port to the eBPF map
+    AddingOutletPort(String),
+    /// Error removing Inlet port to the eBPF map
+    RemovingInletPort(String),
+    /// Error removing Outlet port to the eBPF map
+    RemovingOutletPort(String),
+    /// Couldn't read capabilities
+    ReadCaps(String),
+    /// Privileged Portals prerequisites check failed
+    PrivilegedPortalsPrerequisitesCheckFailed(String),
+    /// The Identifier of the other side of the portal has changed when updating the route
+    IdentifierChanged,
+    /// Invalid OckamPortalPacket
+    InvalidOckamPortalPacket(String),
+    /// Connection timeout
+    ConnectionTimeout,
 }
 
 impl ockam_core::compat::error::Error for TransportError {}
@@ -55,14 +96,43 @@ impl core::fmt::Display for TransportError {
             Self::PeerNotFound => write!(f, "connection peer was not found"),
             Self::PeerBusy => write!(f, "connection peer is busy"),
             Self::UnknownRoute => write!(f, "message routing failed (unknown recipient)"),
-            Self::InvalidAddress => write!(f, "failed to parse the socket address"),
+            Self::InvalidAddress(address) => {
+                write!(f, "failed to parse the socket address {}", address)
+            }
             Self::Capacity => write!(f, "failed to read message (buffer exhausted)"),
             Self::Encoding => write!(f, "failed to encode message"),
             Self::Protocol => write!(f, "violation in transport protocol"),
             Self::GenericIo => write!(f, "generic I/O failure"),
             Self::PortalInvalidState => write!(f, "portal entered invalid state"),
             Self::InvalidRouterResponseType => write!(f, "router responded with invalid type"),
-            Self::AttackAttmept => write!(f, "excessive length of header, possible DoS attack"),
+            Self::AttackAttempt => write!(f, "excessive length of header, possible DoS attack"),
+            Self::InvalidProtocolVersion => write!(f, "invalid protocol version"),
+            Self::MessageLengthExceeded => write!(f, "message length exceeded"),
+            Self::EncodingInternalError => write!(f, "encoding internal error"),
+            Self::RawSocketRead(e) => write!(f, "raw socket read failure: {}", e),
+            Self::RawSocketWrite(e) => write!(f, "raw socket write failure: {}", e),
+            Self::RawSocketCreation(e) => write!(f, "raw socket creation failed: {}", e),
+            Self::RawSocketRedirectToInlet => write!(f, "inlet socket redirection"),
+            Self::RawSocketRedirectToOutlet => write!(f, "outlet socket redirection"),
+            Self::ReadingNetworkInterfaces(e) => {
+                write!(f, "error reading network interfaces: {}", e)
+            }
+            Self::ParsingHeaders(e) => write!(f, "error parsing headers: {}", e),
+            Self::ExpectedIPv4Address => write!(f, "expected IPv4 address instead of IPv6"),
+            Self::AddingInletPort(e) => write!(f, "error adding inlet port {}", e),
+            Self::AddingOutletPort(e) => write!(f, "error adding outlet port {}", e),
+            Self::RemovingInletPort(e) => write!(f, "error removing inlet port {}", e),
+            Self::RemovingOutletPort(e) => write!(f, "error removing outlet port {}", e),
+            Self::ReadCaps(e) => write!(f, "error reading effective capabilities {}", e),
+            Self::PrivilegedPortalsPrerequisitesCheckFailed(e) => {
+                write!(f, "Privileged Portals prerequisites check failed: {}", e)
+            }
+            Self::IdentifierChanged => write!(
+                f,
+                "identifier of the other side of the portal has changed when updating the route"
+            ),
+            Self::InvalidOckamPortalPacket(e) => write!(f, "invalid OckamPortalPacket: {}", e),
+            Self::ConnectionTimeout => write!(f, "connection timed out"),
         }
     }
 }
@@ -80,14 +150,31 @@ impl From<TransportError> for Error {
             PeerNotFound => Kind::Misuse,
             PeerBusy => Kind::Io,
             UnknownRoute => Kind::Misuse,
-            InvalidAddress => Kind::Misuse,
+            InvalidAddress(_) => Kind::Misuse,
             Capacity => Kind::ResourceExhausted,
             Encoding => Kind::Serialization,
             Protocol => Kind::Protocol,
             GenericIo => Kind::Io,
             PortalInvalidState => Kind::Invalid,
             InvalidRouterResponseType => Kind::Invalid,
-            AttackAttmept => Kind::Misuse,
+            AttackAttempt => Kind::Misuse,
+            InvalidProtocolVersion => Kind::Invalid,
+            MessageLengthExceeded => Kind::Unsupported,
+            EncodingInternalError => Kind::Internal,
+            RawSocketRead(_) | RawSocketWrite(_) | RawSocketCreation(_) => Kind::Io,
+            RawSocketRedirectToInlet | RawSocketRedirectToOutlet => Kind::Internal,
+            ReadingNetworkInterfaces(_) => Kind::Io,
+            ParsingHeaders(_) => Kind::Io,
+            ExpectedIPv4Address => Kind::Invalid,
+            AddingInletPort(_)
+            | AddingOutletPort(_)
+            | RemovingInletPort(_)
+            | RemovingOutletPort(_) => Kind::Io,
+            ReadCaps(_) => Kind::Io,
+            PrivilegedPortalsPrerequisitesCheckFailed(_) => Kind::Misuse,
+            IdentifierChanged => Kind::Conflict,
+            InvalidOckamPortalPacket(_) => Kind::Invalid,
+            ConnectionTimeout => Kind::Io,
         };
 
         Error::new(Origin::Transport, kind, err)

@@ -1,5 +1,5 @@
 use crate::database::migrations::RustMigration;
-use crate::database::{FromSqlxError, ToVoid};
+use crate::database::{FromSqlxError, SqlxDatabase, ToVoid, Version};
 use ockam_core::{async_trait, Result};
 use sqlx::*;
 
@@ -14,19 +14,23 @@ impl RustMigration for SplitPolicies {
         Self::name()
     }
 
-    fn version(&self) -> i64 {
+    fn version(&self) -> Version {
         Self::version()
     }
 
-    async fn migrate(&self, connection: &mut AnyConnection) -> Result<bool> {
+    async fn migrate(
+        &self,
+        _legacy_sqlite_database: Option<SqlxDatabase>,
+        connection: &mut AnyConnection,
+    ) -> Result<()> {
         Self::migrate_policies(connection).await
     }
 }
 
 impl SplitPolicies {
     /// Migration version
-    pub fn version() -> i64 {
-        20240212100000
+    pub fn version() -> Version {
+        Version(20240212100000)
     }
 
     /// Migration name
@@ -34,7 +38,7 @@ impl SplitPolicies {
         "migration_20240212100000_migrate_policies"
     }
 
-    pub(crate) async fn migrate_policies(connection: &mut AnyConnection) -> Result<bool> {
+    pub(crate) async fn migrate_policies(connection: &mut AnyConnection) -> Result<()> {
         let mut transaction = Connection::begin(&mut *connection).await.into_core()?;
 
         let query_policies =
@@ -67,7 +71,7 @@ impl SplitPolicies {
         // Commit
         transaction.commit().await.void()?;
 
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -94,15 +98,16 @@ mod test {
     async fn test_migration() -> Result<()> {
         // create the database pool and migrate the tables
         let db_file = NamedTempFile::new().unwrap();
+        let db_file = db_file.path();
 
-        let pool = SqlxDatabase::create_sqlite_connection_pool(db_file.path()).await?;
-
-        let mut connection = pool.acquire().await.into_core()?;
+        let pool = SqlxDatabase::create_sqlite_single_connection_pool(db_file).await?;
 
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to_skip_last_rust_migration(&pool, SplitPolicies::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // insert some policies
         let policy1 = insert_policy("tcp-outlet");
@@ -117,11 +122,16 @@ mod test {
         policy4.execute(&mut *connection).await.void()?;
         policy5.execute(&mut *connection).await.void()?;
 
+        // SQLite EXCLUSIVE lock needs exactly one connection during the migration
+        drop(connection);
+
         // apply migrations
         NodeMigrationSet::new(DatabaseType::Sqlite)
             .create_migrator()?
             .migrate_up_to(&pool, SplitPolicies::version())
             .await?;
+
+        let mut connection = pool.acquire().await.into_core()?;
 
         // check that the "tcp-inlet" and "tcp-outlet" policies are moved to the new table
         let rows: Vec<ResourceTypePolicyRow> = query_as(

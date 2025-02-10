@@ -1,17 +1,19 @@
 use ockam::identity::TimestampInSeconds;
-use sqlx::database::HasArguments;
 use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
 use sqlx::*;
-use tracing::debug;
-
-use ockam_core::async_trait;
-use ockam_core::Result;
-use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
+use sqlx_core::any::AnyArgumentBuffer;
+use std::sync::Arc;
 
 use crate::authenticator::one_time_code::OneTimeCode;
 use crate::authenticator::{
     AuthorityEnrollmentTokenRepository, EnrollmentToken, EnrollmentTokenRow,
 };
+use ockam_core::async_trait;
+use ockam_core::Result;
+use ockam_node::database::AutoRetry;
+use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
+use tracing::debug;
 
 /// Implementation of [`AuthorityEnrollmentTokenRepository`] trait based on an underlying database
 /// using sqlx as its API
@@ -25,6 +27,15 @@ impl AuthorityEnrollmentTokenSqlxDatabase {
     pub fn new(database: SqlxDatabase) -> Self {
         debug!("create a repository for authority enrollment tokens");
         Self { database }
+    }
+
+    /// Create a repository
+    pub fn make_repository(database: SqlxDatabase) -> Arc<dyn AuthorityEnrollmentTokenRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database)))
+        } else {
+            Arc::new(Self::new(database))
+        }
     }
 
     /// Create a new in-memory database
@@ -53,7 +64,7 @@ impl AuthorityEnrollmentTokenRepository for AuthorityEnrollmentTokenSqlxDatabase
         let mut transaction = self.database.pool.begin().await.into_core()?;
 
         let query2 = query_as("SELECT one_time_code, reference, issued_by, created_at, expires_at, ttl_count, attributes FROM authority_enrollment_token WHERE one_time_code = $1")
-            .bind(&one_time_code);
+            .bind(one_time_code);
         let row: Option<EnrollmentTokenRow> =
             query2.fetch_optional(&mut *transaction).await.into_core()?;
         let token: Option<EnrollmentToken> = row.map(|r| r.try_into()).transpose()?;
@@ -62,7 +73,7 @@ impl AuthorityEnrollmentTokenRepository for AuthorityEnrollmentTokenSqlxDatabase
             if token.ttl_count <= 1 {
                 let query3 =
                     query("DElETE FROM authority_enrollment_token WHERE one_time_code = $1")
-                        .bind(&one_time_code);
+                        .bind(one_time_code);
                 query3.execute(&mut *transaction).await.void()?;
                 debug!(
                     "Deleted enrollment token because it has been used. Reference: {}",
@@ -74,7 +85,7 @@ impl AuthorityEnrollmentTokenRepository for AuthorityEnrollmentTokenSqlxDatabase
                     "UPDATE authority_enrollment_token SET ttl_count = $1 WHERE one_time_code = $2",
                 )
                 .bind(new_ttl_count as i64)
-                .bind(&one_time_code);
+                .bind(one_time_code);
                 query3.execute(&mut *transaction).await.void()?;
                 debug!(
                     "Decreasing enrollment token usage count to {}. Reference: {}",
@@ -103,7 +114,7 @@ impl AuthorityEnrollmentTokenRepository for AuthorityEnrollmentTokenSqlxDatabase
         .bind(token.created_at)
         .bind(token.expires_at)
         .bind(token.ttl_count as i64)
-        .bind(minicbor::to_vec(token.attrs)?);
+        .bind(ockam_core::cbor_encode_preallocate(token.attrs)?);
 
         query.execute(&*self.database.pool).await.void()
     }
@@ -118,8 +129,8 @@ impl Type<Any> for OneTimeCode {
 }
 
 impl sqlx::Encode<'_, Any> for OneTimeCode {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
-        <String as sqlx::Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        <String as sqlx::Encode<'_, Any>>::encode_by_ref(&String::from(self), buf)
     }
 }
 
@@ -154,7 +165,7 @@ mod tests {
             attrs.insert("role".to_string(), "user".to_string());
 
             let token = EnrollmentToken {
-                one_time_code: one_time_code.clone(),
+                one_time_code,
                 reference: None,
                 issued_by: issued_by.clone(),
                 created_at,
@@ -165,7 +176,7 @@ mod tests {
 
             repository.store_new_token(token).await?;
 
-            let token1 = repository.use_token(one_time_code.clone(), now()?).await?;
+            let token1 = repository.use_token(one_time_code, now()?).await?;
             assert!(token1.is_some());
             let token1 = token1.unwrap();
             assert_eq!(token1.one_time_code, one_time_code);
@@ -191,7 +202,7 @@ mod tests {
                 Arc::new(AuthorityEnrollmentTokenSqlxDatabase::new(db));
 
             let one_time_code = OneTimeCode::new();
-            let reference = Some(OneTimeCode::new().to_string());
+            let reference = Some(String::from(&OneTimeCode::new()));
 
             let issued_by = Identifier::from_str(
                 "I0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -205,7 +216,7 @@ mod tests {
             attrs.insert("role".to_string(), "user".to_string());
 
             let token = EnrollmentToken {
-                one_time_code: one_time_code.clone(),
+                one_time_code,
                 reference: reference.clone(),
                 issued_by: issued_by.clone(),
                 created_at,
@@ -216,7 +227,7 @@ mod tests {
 
             repository.store_new_token(token).await?;
 
-            let token1 = repository.use_token(one_time_code.clone(), now()?).await?;
+            let token1 = repository.use_token(one_time_code, now()?).await?;
             assert!(token1.is_some());
             let token1 = token1.unwrap();
             assert_eq!(token1.one_time_code, one_time_code);
@@ -252,7 +263,7 @@ mod tests {
             attrs.insert("role".to_string(), "user".to_string());
 
             let token = EnrollmentToken {
-                one_time_code: one_time_code.clone(),
+                one_time_code,
                 reference: None,
                 issued_by: issued_by.clone(),
                 created_at,
@@ -263,9 +274,9 @@ mod tests {
 
             repository.store_new_token(token).await?;
 
-            let token1 = repository.use_token(one_time_code.clone(), now()?).await?;
-            let token2 = repository.use_token(one_time_code.clone(), now()?).await?;
-            let token3 = repository.use_token(one_time_code.clone(), now()?).await?;
+            let token1 = repository.use_token(one_time_code, now()?).await?;
+            let token2 = repository.use_token(one_time_code, now()?).await?;
+            let token3 = repository.use_token(one_time_code, now()?).await?;
             assert!(token1.is_some());
             assert!(token2.is_some());
             assert!(token3.is_none());
@@ -308,7 +319,7 @@ mod tests {
             attrs.insert("role".to_string(), "user".to_string());
 
             let token = EnrollmentToken {
-                one_time_code: one_time_code.clone(),
+                one_time_code,
                 reference: None,
                 issued_by: issued_by.clone(),
                 created_at,
@@ -323,7 +334,7 @@ mod tests {
 
             tokio::time::sleep(Duration::from_secs(2)).await;
 
-            let token1 = repository.use_token(one_time_code.clone(), now()?).await?;
+            let token1 = repository.use_token(one_time_code, now()?).await?;
             assert!(token1.is_none());
             Ok(())
         })

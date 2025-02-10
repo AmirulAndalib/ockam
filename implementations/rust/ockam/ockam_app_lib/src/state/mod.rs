@@ -8,17 +8,17 @@ use tracing::{error, info, trace, warn};
 
 pub use kind::StateKind;
 use ockam::tcp::{TcpListenerOptions, TcpTransport};
-use ockam::AsyncTryClone;
 use ockam::Context;
 use ockam::NodeBuilder;
-use ockam_api::cli_state::CliState;
-use ockam_api::cloud::enroll::auth0::UserInfo;
-use ockam_api::cloud::project::Project;
-use ockam_api::cloud::{AuthorityNodeClient, ControllerClient};
+use ockam::TryClone;
+use ockam_api::cli_state::{CliState, CliStateMode};
 use ockam_api::logs::TracingGuard;
 use ockam_api::nodes::models::portal::OutletStatus;
 use ockam_api::nodes::service::{NodeManagerGeneralOptions, NodeManagerTransportOptions};
 use ockam_api::nodes::{BackgroundNodeClient, InMemoryNode, NodeManagerWorker, NODEMANAGER_ADDR};
+use ockam_api::orchestrator::enroll::auth0::UserInfo;
+use ockam_api::orchestrator::project::Project;
+use ockam_api::orchestrator::{AuthorityNodeClient, ControllerClient};
 
 use crate::api::notification::rust::{Notification, NotificationCallback};
 use crate::api::state::rust::{
@@ -96,21 +96,14 @@ impl AppState {
         application_state_callback: ApplicationStateCallback,
         notification_callback: NotificationCallback,
     ) -> Result<AppState> {
-        let cli_state = CliState::with_default_dir()?;
         let rt = Arc::new(Runtime::new().expect("cannot create a tokio runtime"));
-        let (context, mut executor) = NodeBuilder::new()
+        let cli_state =
+            rt.block_on(async move { CliState::create(CliStateMode::with_default_dir()?).await })?;
+        let (context, _executor) = NodeBuilder::new()
             .no_logging()
             .with_runtime(rt.clone())
             .build();
         let context = Arc::new(context);
-
-        // start the router, it is needed for the node manager creation
-        rt.spawn(async move {
-            let result = executor.start_router().await;
-            if let Err(e) = result {
-                error!(%e, "Failed to start the router")
-            }
-        });
 
         let runtime = context.runtime().clone();
         let future = async {
@@ -129,10 +122,13 @@ impl AppState {
     /// Creates a new AppState for testing purposes
     #[cfg(test)]
     pub async fn test(context: &Context, cli_state: CliState) -> AppState {
-        let context = ockam_core::AsyncTryClone::async_try_clone(context)
-            .await
-            .unwrap();
-        Self::make(Arc::new(context), None, None, cli_state).await
+        Self::make(
+            Arc::new(context.try_clone().unwrap()),
+            None,
+            None,
+            cli_state,
+        )
+        .await
     }
 
     async fn make(
@@ -324,8 +320,8 @@ impl AppState {
 
         info!("stopped the old node manager");
 
-        for w in self.context.list_workers().await.into_diagnostic()? {
-            let _ = self.context.stop_worker(w.address()).await;
+        for w in self.context.list_workers()? {
+            let _ = self.context.stop_address(&w.address().into());
         }
         info!("stopped all the ctx workers");
 
@@ -382,23 +378,18 @@ impl AppState {
 
     pub async fn authority_node(
         &self,
+        ctx: &Context,
         project: &Project,
         caller_identity_name: Option<String>,
     ) -> Result<AuthorityNodeClient> {
         let node_manager = self.node_manager.read().await;
         Ok(node_manager
-            .create_authority_client(project, caller_identity_name)
+            .create_authority_client_with_project(ctx, project, caller_identity_name)
             .await?)
     }
 
     pub async fn background_node(&self, node_name: &str) -> Result<BackgroundNodeClient> {
-        let tcp = self
-            .node_manager
-            .read()
-            .await
-            .tcp_transport()
-            .async_try_clone()
-            .await?;
+        let tcp = self.node_manager.read().await.tcp_transport().try_clone()?;
         Ok(
             BackgroundNodeClient::create_to_node_with_tcp(&tcp, &self.state().await, node_name)
                 .await?,
@@ -410,7 +401,7 @@ impl AppState {
     }
 
     pub async fn delete_background_node(&self, node_name: &str) -> Result<()> {
-        Ok(self.state().await.delete_node(node_name, true).await?)
+        Ok(self.state().await.delete_node(node_name).await?)
     }
 
     pub async fn is_enrolled(&self) -> Result<bool> {
@@ -423,7 +414,7 @@ impl AppState {
     /// Return the list of currently running outlets
     pub async fn tcp_outlet_list(&self) -> Vec<OutletStatus> {
         let node_manager = self.node_manager.read().await;
-        node_manager.list_outlets().await
+        node_manager.list_outlets()
     }
 
     pub async fn user_info(&self) -> Result<UserInfo> {
@@ -528,8 +519,8 @@ impl AppState {
                 .into_iter()
                 .map(|outlet| LocalService {
                     name: outlet.worker_addr.address().to_string(),
-                    address: outlet.socket_addr.ip().to_string(),
-                    port: outlet.socket_addr.port(),
+                    address: outlet.to.hostname().to_string(),
+                    port: outlet.to.port(),
                     scheme: None,
                     shared_with: vec![],
                     available: true,
@@ -695,7 +686,7 @@ pub(crate) async fn make_node_manager(
     ctx: Arc<Context>,
     cli_state: &CliState,
 ) -> miette::Result<Arc<InMemoryNode>> {
-    let tcp = TcpTransport::create(&ctx).await.into_diagnostic()?;
+    let tcp = TcpTransport::create(&ctx).into_diagnostic()?;
     let options = TcpListenerOptions::new();
     let listener = tcp
         .listen(&"127.0.0.1:0", options)
@@ -703,7 +694,7 @@ pub(crate) async fn make_node_manager(
         .into_diagnostic()?;
 
     let _ = cli_state
-        .start_node_with_optional_values(NODE_NAME, &None, &None, Some(&listener))
+        .start_node_with_optional_values(NODE_NAME, &None, Some(&listener))
         .await?;
 
     let trust_options = cli_state
@@ -721,7 +712,7 @@ pub(crate) async fn make_node_manager(
                 None,
                 true,
             ),
-            NodeManagerTransportOptions::new(listener.flow_control_id().clone(), tcp, None),
+            NodeManagerTransportOptions::new_tcp(listener.flow_control_id().clone(), tcp),
             trust_options,
         )
         .await
@@ -730,11 +721,10 @@ pub(crate) async fn make_node_manager(
 
     let node_manager_worker = NodeManagerWorker::new(node_manager.clone());
     ctx.start_worker(NODEMANAGER_ADDR, node_manager_worker)
-        .await
         .into_diagnostic()?;
 
     ctx.flow_controls()
-        .add_consumer(NODEMANAGER_ADDR, listener.flow_control_id());
+        .add_consumer(&NODEMANAGER_ADDR.into(), listener.flow_control_id());
     Ok(node_manager)
 }
 

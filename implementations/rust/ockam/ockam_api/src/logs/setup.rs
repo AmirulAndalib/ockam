@@ -8,8 +8,8 @@ use opentelemetry_sdk::export::trace::SpanExporter;
 use opentelemetry_sdk::logs::{BatchLogProcessor, LoggerProvider};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{BatchConfig, BatchConfigBuilder, BatchSpanProcessor};
-use opentelemetry_sdk::{self as sdk};
 use opentelemetry_sdk::{logs, Resource};
+use opentelemetry_semantic_conventions::attribute;
 use std::io::{empty, stdout};
 use tonic::metadata::*;
 use tracing_appender::non_blocking::NonBlocking;
@@ -24,11 +24,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{fmt, layer::SubscriberExt, registry};
 
 use crate::cli_state::journeys::APP_NAME;
-use ockam_node::Executor;
 
 use crate::logs::tracing_guard::TracingGuard;
 use crate::logs::{
     ExportingConfiguration, GlobalErrorHandler, LoggingConfiguration, OckamLogExporter,
+    OckamLogFormat,
 };
 use crate::logs::{LogFormat, OckamSpanExporter};
 
@@ -108,7 +108,9 @@ impl LoggingTracing {
         let result = match logging_configuration.format() {
             LogFormat::Pretty => layers.with(appender.pretty()).try_init(),
             LogFormat::Json => layers.with(appender.json()).try_init(),
-            LogFormat::Default => layers.with(appender).try_init(),
+            LogFormat::Default => layers
+                .with(appender.event_format(OckamLogFormat::new()))
+                .try_init(),
         };
         result.expect("Failed to initialize tracing subscriber");
 
@@ -129,7 +131,9 @@ impl LoggingTracing {
             let result = match logging_configuration.format() {
                 LogFormat::Pretty => layers.with(appender.pretty()).try_init(),
                 LogFormat::Json => layers.with(appender.json()).try_init(),
-                LogFormat::Default => layers.with(appender).try_init(),
+                LogFormat::Default => layers
+                    .with(appender.event_format(OckamLogFormat::new()))
+                    .try_init(),
             };
             result.expect("Failed to initialize tracing subscriber");
         };
@@ -184,16 +188,14 @@ fn create_log_exporter(
     let log_export_timeout = exporting_configuration.log_export_timeout();
     let endpoint = exporting_configuration.opentelemetry_endpoint().to_string();
 
-    Executor::execute_future(async move {
-        opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(endpoint)
-            .with_timeout(log_export_timeout)
-            .with_metadata(get_otlp_headers())
-            .build_log_exporter()
-            .expect("failed to create the log exporter")
-    })
-    .expect("can't create a log exporter")
+    opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(endpoint)
+        .with_timeout(log_export_timeout)
+        .with_metadata(get_otlp_headers())
+        .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
+        .build_log_exporter()
+        .expect("failed to create the log exporter")
 }
 
 /// Create a span exporter
@@ -204,16 +206,14 @@ fn create_span_exporter(
     let trace_export_timeout = exporting_configuration.span_export_timeout();
     let endpoint = exporting_configuration.opentelemetry_endpoint().to_string();
 
-    Executor::execute_future(async move {
-        opentelemetry_otlp::new_exporter()
-            .tonic()
-            .with_endpoint(endpoint.clone())
-            .with_timeout(trace_export_timeout)
-            .with_metadata(get_otlp_headers())
-            .build_span_exporter()
-            .expect("failed to create the span exporter")
-    })
-    .expect("can't create a span exporter")
+    opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(endpoint.clone())
+        .with_timeout(trace_export_timeout)
+        .with_metadata(get_otlp_headers())
+        .with_tls_config(tonic::transport::ClientTlsConfig::new().with_native_roots())
+        .build_span_exporter()
+        .expect("failed to create the span exporter")
 }
 
 /// Create the tracing layer for OpenTelemetry
@@ -227,7 +227,7 @@ fn create_opentelemetry_tracing_layer<
     exporting_configuration: &ExportingConfiguration,
     span_exporter: S,
 ) -> (
-    OpenTelemetryLayer<R, sdk::trace::Tracer>,
+    OpenTelemetryLayer<R, opentelemetry_sdk::trace::Tracer>,
     opentelemetry_sdk::trace::TracerProvider,
 ) {
     let app = app_name.to_string();
@@ -239,24 +239,23 @@ fn create_opentelemetry_tracing_layer<
         .build();
     let is_ockam_developer = exporting_configuration.is_ockam_developer();
     let span_export_cutoff = exporting_configuration.span_export_cutoff();
-    Executor::execute_future(async move {
-        let trace_config = sdk::trace::Config::default().with_resource(make_resource(app));
-        let (tracer, tracer_provider) = create_tracer(
-            trace_config,
-            batch_config,
-            OckamSpanExporter::new(
-                span_exporter,
-                node_name,
-                is_ockam_developer,
-                span_export_cutoff,
-            ),
-        );
-        (
-            tracing_opentelemetry::layer().with_tracer(tracer),
-            tracer_provider,
-        )
-    })
-    .expect("Failed to build the tracing layer")
+
+    let trace_config =
+        opentelemetry_sdk::trace::Config::default().with_resource(make_resource(app));
+    let (tracer, tracer_provider) = create_tracer(
+        trace_config,
+        batch_config,
+        OckamSpanExporter::new(
+            span_exporter,
+            node_name,
+            is_ockam_developer,
+            span_export_cutoff,
+        ),
+    );
+    (
+        tracing_opentelemetry::layer().with_tracer(tracer),
+        tracer_provider,
+    )
 }
 
 /// Create the logging layer for OpenTelemetry
@@ -274,28 +273,25 @@ fn create_opentelemetry_logging_layer<L: LogExporter + Send + 'static>(
     let log_export_scheduled_delay = exporting_configuration.log_export_scheduled_delay();
     let log_export_queue_size = exporting_configuration.log_export_queue_size();
     let log_export_cutoff = exporting_configuration.log_export_cutoff();
-    Executor::execute_future(async move {
-        let config = logs::Config::default().with_resource(make_resource(app));
-        let batch_config = logs::BatchConfigBuilder::default()
-            .with_max_export_timeout(log_export_timeout)
-            .with_scheduled_delay(log_export_scheduled_delay)
-            .with_max_queue_size(log_export_queue_size as usize)
-            .build();
 
-        let log_exporter = OckamLogExporter::new(log_exporter, log_export_cutoff);
+    let resource = make_resource(app);
+    let batch_config = logs::BatchConfigBuilder::default()
+        .with_max_export_timeout(log_export_timeout)
+        .with_scheduled_delay(log_export_scheduled_delay)
+        .with_max_queue_size(log_export_queue_size as usize)
+        .build();
 
-        let log_processor =
-            BatchLogProcessor::builder(log_exporter, opentelemetry_sdk::runtime::Tokio)
-                .with_batch_config(batch_config)
-                .build();
-        let provider = LoggerProvider::builder()
-            .with_config(config)
-            .with_log_processor(log_processor)
-            .build();
-        let layer = OpenTelemetryTracingBridge::new(&provider);
-        (layer, provider)
-    })
-    .expect("Failed to build the logging layer")
+    let log_exporter = OckamLogExporter::new(log_exporter, log_export_cutoff);
+
+    let log_processor = BatchLogProcessor::builder(log_exporter, opentelemetry_sdk::runtime::Tokio)
+        .with_batch_config(batch_config)
+        .build();
+    let provider = LoggerProvider::builder()
+        .with_resource(resource)
+        .with_log_processor(log_processor)
+        .build();
+    let layer = OpenTelemetryTracingBridge::new(&provider);
+    (layer, provider)
 }
 
 /// Create the appending layer for OpenTelemetry
@@ -407,11 +403,14 @@ fn set_global_error_handler(logging_configuration: &LoggingConfiguration) {
 
 /// Create a Tracer using the provided span exporter
 fn create_tracer<S: SpanExporter + 'static>(
-    trace_config: sdk::trace::Config,
+    trace_config: opentelemetry_sdk::trace::Config,
     batch_config: BatchConfig,
     exporter: S,
-) -> (sdk::trace::Tracer, opentelemetry_sdk::trace::TracerProvider) {
-    let span_processor = BatchSpanProcessor::builder(exporter, sdk::runtime::Tokio)
+) -> (
+    opentelemetry_sdk::trace::Tracer,
+    opentelemetry_sdk::trace::TracerProvider,
+) {
+    let span_processor = BatchSpanProcessor::builder(exporter, opentelemetry_sdk::runtime::Tokio)
         .with_batch_config(batch_config)
         .build();
     let provider = opentelemetry_sdk::trace::TracerProvider::builder()
@@ -428,14 +427,8 @@ fn create_tracer<S: SpanExporter + 'static>(
 fn make_resource(app_name: String) -> Resource {
     let host_name = gethostname().to_string_lossy().to_string();
     Resource::new(vec![
-        KeyValue::new(
-            opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-            "ockam",
-        ),
-        KeyValue::new(
-            opentelemetry_semantic_conventions::resource::HOST_NAME,
-            host_name,
-        ),
+        KeyValue::new(attribute::SERVICE_NAME, "ockam"),
+        KeyValue::new(attribute::HOST_NAME, host_name),
         KeyValue::new(APP_NAME.clone(), app_name),
     ])
 }

@@ -1,16 +1,18 @@
 use core::str::FromStr;
-use sqlx::database::HasArguments;
 use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
 use sqlx::*;
+use sqlx_core::any::AnyArgumentBuffer;
+use std::sync::Arc;
 use tracing::debug;
-
-use ockam_core::async_trait;
-use ockam_core::compat::vec::Vec;
-use ockam_core::Result;
-use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
 
 use crate::policy::ResourceTypePolicy;
 use crate::{Action, Expr, ResourceType, ResourceTypePoliciesRepository};
+use ockam_core::async_trait;
+use ockam_core::compat::vec::Vec;
+use ockam_core::Result;
+use ockam_node::database::AutoRetry;
+use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
 
 #[derive(Clone)]
 pub struct ResourceTypePolicySqlxDatabase {
@@ -25,6 +27,18 @@ impl ResourceTypePolicySqlxDatabase {
         Self {
             database,
             node_name: node_name.to_string(),
+        }
+    }
+
+    /// Create a repository
+    pub fn make_repository(
+        database: SqlxDatabase,
+        node_name: &str,
+    ) -> Arc<dyn ResourceTypePoliciesRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database, node_name)))
+        } else {
+            Arc::new(Self::new(database, node_name))
         }
     }
 
@@ -128,7 +142,7 @@ impl Type<Any> for ResourceType {
 }
 
 impl Encode<'_, Any> for ResourceType {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <String as Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
     }
 }
@@ -140,7 +154,7 @@ impl Type<Any> for Action {
 }
 
 impl sqlx::Encode<'_, Any> for Action {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <String as Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
     }
 }
@@ -152,7 +166,7 @@ impl Type<Any> for Expr {
 }
 
 impl Encode<'_, Any> for Expr {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <String as Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
     }
 }

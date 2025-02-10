@@ -1,14 +1,16 @@
 use core::str::FromStr;
-use sqlx::database::HasArguments;
 use sqlx::encode::IsNull;
+use sqlx::error::BoxDynError;
 use sqlx::*;
+use sqlx_core::any::AnyArgumentBuffer;
+use std::sync::Arc;
 use tracing::debug;
 
+use crate::{Resource, ResourceName, ResourceType, ResourcesRepository};
 use ockam_core::async_trait;
 use ockam_core::Result;
+use ockam_node::database::AutoRetry;
 use ockam_node::database::{FromSqlxError, SqlxDatabase, ToVoid};
-
-use crate::{Resource, ResourceName, ResourceType, ResourcesRepository};
 
 #[derive(Clone)]
 pub struct ResourcesSqlxDatabase {
@@ -23,6 +25,18 @@ impl ResourcesSqlxDatabase {
         Self {
             database,
             node_name: node_name.to_string(),
+        }
+    }
+
+    /// Create a repository
+    pub fn make_repository(
+        database: SqlxDatabase,
+        node_name: &str,
+    ) -> Arc<dyn ResourcesRepository> {
+        if database.needs_retry() {
+            Arc::new(AutoRetry::new(Self::new(database, node_name)))
+        } else {
+            Arc::new(Self::new(database, node_name))
         }
     }
 
@@ -97,7 +111,7 @@ impl Type<Any> for ResourceName {
 }
 
 impl sqlx::Encode<'_, Any> for ResourceName {
-    fn encode_by_ref(&self, buf: &mut <Any as HasArguments>::ArgumentBuffer) -> IsNull {
+    fn encode_by_ref(&self, buf: &mut AnyArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <String as sqlx::Encode<'_, Any>>::encode_by_ref(&self.to_string(), buf)
     }
 }

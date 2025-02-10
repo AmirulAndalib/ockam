@@ -1,14 +1,7 @@
-use minicbor::{Decode, Encode};
-use std::fmt::{Display, Formatter};
-use std::path::PathBuf;
-use std::process;
-
+use colorful::Colorful;
+use minicbor::{CborLen, Decode, Encode};
 use nix::errno::Errno;
-
 use nix::sys::signal;
-use serde::Serialize;
-use sysinfo::{Pid, ProcessStatus, System};
-
 use ockam::identity::utils::now;
 use ockam::identity::Identifier;
 use ockam::tcp::TcpListener;
@@ -16,28 +9,32 @@ use ockam_core::errcode::{Kind, Origin};
 use ockam_core::Error;
 use ockam_multiaddr::proto::{DnsAddr, Node, Tcp};
 use ockam_multiaddr::MultiAddr;
+use serde::Serialize;
+use std::fmt::{Display, Formatter};
+use std::path::PathBuf;
+use std::process;
+use std::time::Duration;
+use sysinfo::{Pid, ProcessStatus, ProcessesToUpdate, System};
 
 use crate::cli_state::{random_name, NamedVault, Result};
 use crate::cli_state::{CliState, CliStateError};
-use crate::cloud::project::Project;
 use crate::colors::color_primary;
 use crate::config::lookup::InternetAddress;
 
-use crate::ConnectionStatus;
+use crate::{fmt_warn, ConnectionStatus};
 
 /// The methods below support the creation and update of local nodes
 impl CliState {
     /// Create a node, with some optional associated values, and start it
-    #[instrument(skip_all, fields(node_name = node_name, identity_name = identity_name.clone(), project_name = project_name.clone()))]
+    #[instrument(skip_all, fields(node_name = node_name, identity_name = identity_name.clone()))]
     pub async fn start_node_with_optional_values(
         &self,
         node_name: &str,
         identity_name: &Option<String>,
-        project_name: &Option<String>,
         tcp_listener: Option<&TcpListener>,
     ) -> Result<NodeInfo> {
         let mut node = self
-            .create_node_with_optional_values(node_name, identity_name, project_name)
+            .create_node_with_optional_identity(node_name, identity_name)
             .await?;
         if node.pid.is_none() {
             let pid = process::id();
@@ -53,16 +50,12 @@ impl CliState {
         Ok(node)
     }
 
-    /// Create a node, with some optional associated values:
-    ///
-    ///  - an identity name. That identity is used by the `NodeManager` to create secure channels
-    ///  - a project name. It is used to create policies on resources provisioned on a node (like a TCP outlet for example)
-    #[instrument(skip_all, fields(node_name = node_name, identity_name = identity_name.clone(), project_name = project_name.clone()))]
-    pub async fn create_node_with_optional_values(
+    /// Create a node, with an optional identity name. That identity is used by the `NodeManager` to create secure channels
+    #[instrument(skip_all, fields(node_name = node_name, identity_name = identity_name.clone()))]
+    pub async fn create_node_with_optional_identity(
         &self,
         node_name: &str,
         identity_name: &Option<String>,
-        project_name: &Option<String>,
     ) -> Result<NodeInfo> {
         let identity = match identity_name {
             Some(name) => self.get_named_identity(name).await?,
@@ -71,7 +64,6 @@ impl CliState {
         let node = self
             .create_node_with_identifier(node_name, &identity.identifier())
             .await?;
-        self.set_node_project(node_name, project_name).await?;
         Ok(node)
     }
 
@@ -86,7 +78,7 @@ impl CliState {
 
     pub fn backup_logs(&self, node_name: &str) -> Result<()> {
         // Atm node dir only has logs
-        let node_dir = self.node_dir(node_name);
+        let node_dir = self.node_dir(node_name)?;
 
         let now = now()?;
 
@@ -111,41 +103,25 @@ impl CliState {
     /// Delete a node
     ///  - first stop it if it is running
     ///  - then remove it from persistent storage
-    #[instrument(skip_all, fields(node_name = node_name, force = %force))]
-    pub async fn delete_node(&self, node_name: &str, force: bool) -> Result<()> {
-        self.stop_node(node_name, force).await?;
+    #[instrument(skip_all, fields(node_name = node_name))]
+    pub async fn delete_node(&self, node_name: &str) -> Result<()> {
+        self.stop_node(node_name).await?;
         self.remove_node(node_name).await?;
         Ok(())
     }
 
     /// Delete all created nodes
-    #[instrument(skip_all, fields(force = %force))]
-    pub async fn delete_all_nodes(&self, force: bool) -> Result<()> {
+    #[instrument(skip_all)]
+    pub async fn delete_all_nodes(&self) -> Result<()> {
         let nodes = self.nodes_repository().get_nodes().await?;
         for node in nodes {
-            self.delete_node(&node.name(), force).await?;
+            if let Err(err) = self.delete_node(&node.name()).await {
+                self.notify_message(fmt_warn!(
+                    "Failed to delete the node {}: {err}",
+                    color_primary(node.name())
+                ));
+            }
         }
-        Ok(())
-    }
-
-    /// This method can be used to start a local node first
-    /// then create a project, and associate it to the node
-    #[instrument(skip_all, fields(node_name = node_name, project_name = project_name.clone()))]
-    pub async fn set_node_project(
-        &self,
-        node_name: &str,
-        project_name: &Option<String>,
-    ) -> Result<()> {
-        let project = match project_name {
-            Some(name) => Some(self.projects().get_project_by_name(name).await?),
-            None => self.projects().get_default_project().await.ok(),
-        };
-
-        if let Some(project) = project {
-            self.nodes_repository()
-                .set_node_project_name(node_name, project.name())
-                .await?
-        };
         Ok(())
     }
 
@@ -169,79 +145,120 @@ impl CliState {
         }
 
         // remove the node directory
-        let _ = std::fs::remove_dir_all(self.node_dir(node_name));
+        let _ = std::fs::remove_dir_all(self.node_dir(node_name)?);
         debug!(name=%node_name, "node deleted");
         Ok(())
     }
 
     /// Stop a background node
-    ///
-    ///  - if force is true, send a SIGKILL signal to the node process
-    #[instrument(skip_all, fields(node_name = node_name, force = %force))]
-    pub async fn stop_node(&self, node_name: &str, force: bool) -> Result<()> {
+    #[instrument(skip_all, fields(node_name = node_name))]
+    pub async fn stop_node(&self, node_name: &str) -> Result<()> {
+        debug!(name=%node_name, "stopping node...");
         let node = self.get_node(node_name).await?;
-        self.nodes_repository().set_no_node_pid(node_name).await?;
         if let Some(pid) = node.pid() {
-            // avoid killing the current process, return successfully instead.
-            // this is useful when we need to stop all the nodes, for example
-            // during a reset
+            // Avoid killing the current process, return successfully instead.
+            // This is needed to avoid killing the process that is running the CLI, or when exiting a foreground node.
             if pid == process::id() {
+                debug!(name=%node_name, "node is the current process, skipping sending kill signal");
+                self.nodes_repository().set_no_node_pid(node_name).await?;
                 return Ok(());
             }
 
-            // kill process
-            let pid = nix::unistd::Pid::from_raw(pid as i32);
-            let kill_signal = if force {
-                signal::Signal::SIGKILL
-            } else {
-                signal::Signal::SIGTERM
-            };
-            signal::kill(pid, kill_signal)
-                .or_else(|e| {
-                    if e == Errno::ESRCH {
-                        tracing::warn!(node = %node.name(), %pid, "No such process");
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })
-                .map_err(|e| {
-                    CliStateError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("failed to stop PID `{pid}` with error `{e}`"),
-                    ))
-                })?;
-            debug!(name = %node.name(), %pid, "sent stop signal to node process");
-
-            // wait until the node has fully stopped
-            let mut attempts = 0;
-            let max_attempts = 50; // 5 seconds max
-            let timeout = std::time::Duration::from_millis(100);
-            let mut sys = System::new();
-            let pid = Pid::from_u32(pid.as_raw() as u32);
-            loop {
-                sys.refresh_processes();
-                if sys.process(pid).is_none() {
-                    info!(name = %node.name(), %pid, "node process exited");
-                    break;
-                }
-                if attempts > max_attempts {
-                    warn!(name = %node.name(), %pid, "node process did not exit");
-                    break;
-                }
-                // notify the user that the node is stopping if it takes too long
-                if attempts == 5 {
-                    self.notify_progress(format!(
-                        "Waiting for node {} to stop",
-                        color_primary(node_name)
+            // Try first with SIGTERM, if it fails, try again with SIGKILL
+            if let Err(e) = self
+                .kill_node_process(&node, pid, signal::Signal::SIGTERM)
+                .await
+            {
+                warn!(name=%node_name, %pid, %e, "failed to stop node process with SIGTERM");
+                if let Err(e) = self
+                    .kill_node_process(&node, pid, signal::Signal::SIGKILL)
+                    .await
+                {
+                    error!(name=%node_name, %pid, %e, "failed to stop node process with SIGKILL");
+                    return Err(e);
+                } else {
+                    self.notify_progress_finish(format!(
+                        "The node {} has been stopped",
+                        color_primary(node_name),
                     ));
                 }
-                attempts += 1;
-                tokio::time::sleep(timeout).await;
             }
         }
-
+        self.nodes_repository().set_no_node_pid(node_name).await?;
+        debug!(name=%node_name, "node stopped");
         Ok(())
+    }
+
+    async fn kill_node_process(
+        &self,
+        node: &NodeInfo,
+        pid: u32,
+        signal: signal::Signal,
+    ) -> Result<()> {
+        debug!(%pid, %signal, "sending kill signals to node's process");
+        let node_name = &node.name;
+        let pid = nix::unistd::Pid::from_raw(pid as i32);
+        let _ = self.send_kill_signal(pid, signal);
+
+        // Wait until the node has fully stopped
+        let timeout = Duration::from_millis(100);
+        tokio::time::sleep(timeout).await;
+        let max_attempts = Duration::from_secs(5).as_millis() / timeout.as_millis();
+        let show_message_at_attempt = Duration::from_secs(2).as_millis() / timeout.as_millis();
+        let mut attempts = 0;
+
+        while let NodeProcessStatus::Running(_) = node.status() {
+            match self.send_kill_signal(pid, signal) {
+                Ok(()) => break,
+                Err(err) => {
+                    // Return if max attempts have been reached
+                    if attempts > max_attempts {
+                        warn!(name = %node_name, %pid, %signal, "node process did not exit");
+                        self.notify_progress_finish_and_clear();
+                        return Err(err);
+                    }
+                    // Notify the user that the node is stopping if it takes too long
+                    if attempts == show_message_at_attempt {
+                        self.notify_progress(format!(
+                            "Waiting for node's {} process {} to stop",
+                            color_primary(node_name),
+                            color_primary(pid)
+                        ));
+                    }
+                    attempts += 1;
+                    tokio::time::sleep(timeout).await;
+                }
+            }
+        }
+        self.notify_progress_finish_and_clear();
+        Ok(())
+    }
+
+    /// Sends the kill signal to a process
+    ///
+    /// Returns Ok only if the process has been killed (PID doesn't exist), otherwise an error
+    fn send_kill_signal(&self, pid: nix::unistd::Pid, signal: signal::Signal) -> Result<()> {
+        match signal::kill(pid, signal) {
+            Ok(_) => Err(CliStateError::Other(
+                "kill signal sent, process might still be alive".into(),
+            )),
+            Err(err) => {
+                let base_error = CliStateError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to stop PID {pid} with error {err}"),
+                ));
+                match err {
+                    // No such process
+                    Errno::ESRCH => Ok(()),
+                    // Invalid signal
+                    Errno::EINVAL => Err(base_error),
+                    // Operation not permitted
+                    Errno::EPERM => Err(base_error),
+                    // The rest of the errors are unexpected for this function
+                    _ => Err(base_error),
+                }
+            }
+        }
     }
 
     /// Set a node as the default node
@@ -271,7 +288,7 @@ impl CliState {
     ) -> Result<()> {
         Ok(self
             .nodes_repository()
-            .set_http_server_address(node_name, address)
+            .set_status_endpoint_address(node_name, address)
             .await?)
     }
 
@@ -302,11 +319,10 @@ impl CliState {
         if let Some(node) = self.nodes_repository().get_node(node_name).await? {
             Ok(node)
         } else {
-            Err(Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                format!("There is no node with name {node_name}"),
-            ))?
+            Err(CliStateError::ResourceNotFound {
+                resource: "node".to_string(),
+                name: node_name.to_string(),
+            })?
         }
     }
 
@@ -323,11 +339,7 @@ impl CliState {
             .nodes_repository()
             .get_default_node()
             .await?
-            .ok_or(Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                "There is no default node",
-            ))?)
+            .ok_or_else(|| Error::new(Origin::Api, Kind::NotFound, "There is no default node"))?)
     }
 
     /// Return the node information for the given node name, otherwise for the default node
@@ -336,23 +348,6 @@ impl CliState {
         match node_name {
             Some(name) => self.get_node(name).await,
             None => self.get_default_node().await,
-        }
-    }
-
-    /// Return the project associated to a node if there is one
-    #[instrument(skip_all, fields(node_name = node_name))]
-    pub async fn get_node_project(&self, node_name: &str) -> Result<Project> {
-        match self
-            .nodes_repository()
-            .get_node_project_name(node_name)
-            .await?
-        {
-            Some(project_name) => self.projects().get_project_by_name(&project_name).await,
-            None => Err(Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                format!("there is no project associated to node {node_name}"),
-            ))?,
         }
     }
 
@@ -370,11 +365,13 @@ impl CliState {
                 }
             })
             .max_by_key(|file| file.metadata().unwrap().modified().unwrap())
-            .ok_or(Error::new(
-                Origin::Api,
-                Kind::NotFound,
-                format!("there is no log file for the node {node_name}"),
-            ))?;
+            .ok_or_else(|| {
+                Error::new(
+                    Origin::Api,
+                    Kind::NotFound,
+                    format!("there is no log file for the node {node_name}"),
+                )
+            })?;
         Ok(current_log_file.path())
     }
 }
@@ -390,11 +387,17 @@ impl CliState {
     ) -> Result<NodeInfo> {
         let repository = self.nodes_repository();
 
-        let is_default = repository.is_default_node(node_name).await?
+        let mut is_default = repository.is_default_node(node_name).await?
             || repository.get_nodes().await?.is_empty();
+        if let Some(node) = repository.get_default_node().await? {
+            // If the default node is not running, we can set the new node as the default
+            if node.pid.is_none() {
+                is_default = true;
+            }
+        }
 
         let tcp_listener_address = repository.get_tcp_listener_address(node_name).await?;
-        let http_server_address = repository.get_http_server_address(node_name).await?;
+        let status_endpoint_address = repository.get_status_endpoint_address(node_name).await?;
 
         let node_info = NodeInfo::new(
             node_name.to_string(),
@@ -404,7 +407,7 @@ impl CliState {
             false,
             tcp_listener_address,
             Some(process::id()),
-            http_server_address,
+            status_endpoint_address,
         );
         repository.store_node(&node_info).await?;
         Ok(node_info)
@@ -433,7 +436,7 @@ impl CliState {
 
     /// Create a directory used to store files specific to a node
     fn create_node_dir(&self, node_name: &str) -> Result<PathBuf> {
-        let path = self.node_dir(node_name);
+        let path = self.node_dir(node_name)?;
         std::fs::create_dir_all(&path)?;
         Ok(path)
     }
@@ -447,12 +450,20 @@ impl CliState {
     }
 
     /// Return the directory used by a node
-    pub fn node_dir(&self, node_name: &str) -> PathBuf {
-        Self::make_node_dir_path(&self.dir(), node_name)
+    pub fn node_dir(&self, node_name: &str) -> Result<PathBuf> {
+        Ok(Self::make_node_dir_path(self.dir()?, node_name))
+    }
+
+    /// Return a log path to be used for a given command
+    pub fn command_log_path(command_name: &str) -> Result<PathBuf> {
+        Ok(Self::make_command_log_path(
+            &CliState::default_dir()?,
+            command_name,
+        ))
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Decode, Encode)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Encode, Decode, CborLen)]
 #[serde(rename_all = "lowercase", tag = "status", content = "pid")]
 pub enum NodeProcessStatus {
     #[n(0)]
@@ -500,7 +511,7 @@ pub struct NodeInfo {
     is_authority: bool,
     tcp_listener_address: Option<InternetAddress>,
     pid: Option<u32>,
-    http_server_address: Option<InternetAddress>,
+    status_endpoint_address: Option<InternetAddress>,
 }
 
 impl NodeInfo {
@@ -513,7 +524,7 @@ impl NodeInfo {
         is_authority: bool,
         tcp_listener_address: Option<InternetAddress>,
         pid: Option<u32>,
-        http_server_address: Option<InternetAddress>,
+        status_endpoint_address: Option<InternetAddress>,
     ) -> Self {
         Self {
             name,
@@ -523,7 +534,7 @@ impl NodeInfo {
             is_authority,
             tcp_listener_address,
             pid,
-            http_server_address,
+            status_endpoint_address,
         }
     }
     pub fn name(&self) -> String {
@@ -565,16 +576,18 @@ impl NodeInfo {
         Ok(self
             .tcp_listener_address
             .as_ref()
-            .ok_or(ockam::Error::new(
-                Origin::Api,
-                Kind::Internal,
-                "no transport has been set on the node".to_string(),
-            ))
+            .ok_or_else(|| {
+                ockam::Error::new(
+                    Origin::Api,
+                    Kind::Internal,
+                    "no transport has been set on the node".to_string(),
+                )
+            })
             .and_then(|t| t.multi_addr())?)
     }
 
-    pub fn http_server_address(&self) -> Option<InternetAddress> {
-        self.http_server_address.clone()
+    pub fn status_endpoint_address(&self) -> Option<InternetAddress> {
+        self.status_endpoint_address.clone()
     }
 
     pub fn pid(&self) -> Option<u32> {
@@ -602,9 +615,9 @@ impl NodeInfo {
     pub fn status(&self) -> NodeProcessStatus {
         if let Some(pid) = self.pid() {
             let mut sys = System::new();
-            sys.refresh_processes();
-            if let Some(p) = sys.process(Pid::from(pid as usize)) {
-                // Under certain circumstances the process can be in a state where it's not running
+            sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), false);
+            if let Some(p) = sys.process(Pid::from_u32(pid)) {
+                // Under certain circumstances, the process can be in a state where it's not running,
                 // and we are unable to kill it. For example, `kill -9` a process created by
                 // `node create` in a Docker environment will result in a zombie process.
                 if matches!(p.status(), ProcessStatus::Dead | ProcessStatus::Zombie) {
@@ -640,12 +653,10 @@ impl NodeInfo {
 
 #[cfg(test)]
 mod tests {
-    use crate::cloud::project::models::ProjectModel;
+    use super::*;
     use crate::config::lookup::InternetAddress;
     use std::net::SocketAddr;
     use std::str::FromStr;
-
-    use super::*;
 
     #[tokio::test]
     async fn test_create_node() -> Result<()> {
@@ -729,7 +740,7 @@ mod tests {
             "the node information is not available anymore"
         );
         assert!(
-            !cli.node_dir(node1).exists(),
+            !cli.node_dir(node1).unwrap().exists(),
             "the node directory must be deleted"
         );
 
@@ -740,12 +751,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_node_with_optional_values() -> Result<()> {
+    async fn test_create_node_with_optional_identity() -> Result<()> {
         let cli = CliState::test().await?;
 
         // a node can be created with just a name
         let node = cli
-            .create_node_with_optional_values("node-1", &None, &None)
+            .create_node_with_optional_identity("node-1", &None)
             .await?;
         let result = cli.get_node(&node.name()).await?;
         assert_eq!(result.name(), node.name());
@@ -753,43 +764,10 @@ mod tests {
         // a node can be created with a name and an existing identity
         let identity = cli.create_identity_with_name("name").await?;
         let node = cli
-            .create_node_with_optional_values("node-2", &Some(identity.name()), &None)
+            .create_node_with_optional_identity("node-2", &Some(identity.name()))
             .await?;
         let result = cli.get_node(&node.name()).await?;
         assert_eq!(result.identifier(), identity.identifier());
-
-        // a node can be created with a name, an existing identity and an existing project
-        let project = ProjectModel {
-            id: "project_id".to_string(),
-            name: "project_name".to_string(),
-            space_name: "1".to_string(),
-            access_route: "".to_string(),
-            users: vec![],
-            space_id: "1".to_string(),
-            identity: None,
-            project_change_history: None,
-            authority_access_route: None,
-            authority_identity: None,
-            okta_config: None,
-            kafka_config: None,
-            version: None,
-            running: None,
-            operation_id: None,
-            user_roles: vec![],
-        };
-        cli.projects()
-            .import_and_store_project(project.clone())
-            .await?;
-
-        let node = cli
-            .create_node_with_optional_values(
-                "node-4",
-                &Some(identity.name()),
-                &Some(project.name.clone()),
-            )
-            .await?;
-        let result = cli.get_node_project(&node.name()).await?;
-        assert_eq!(result.name(), &project.name);
 
         Ok(())
     }
