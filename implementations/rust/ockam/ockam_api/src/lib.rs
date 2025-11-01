@@ -50,6 +50,7 @@ mod http;
 mod multiaddr_resolver;
 mod rendezvous_healthcheck;
 pub mod test_utils;
+#[cfg(feature = "ui")]
 mod ui;
 mod util;
 
@@ -60,6 +61,7 @@ pub use multiaddr_resolver::*;
 pub use nodes::service::default_address::*;
 pub use rendezvous_healthcheck::*;
 pub use session::connection_status::ConnectionStatus;
+#[cfg(feature = "ui")]
 pub use ui::*;
 pub use util::*;
 pub use version::*;
