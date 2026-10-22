@@ -84,7 +84,7 @@ ockam_macros = { path = "../ockam_macros", version = "^0.39.0", default-features
 ockam_node = { path = "../ockam_node", version = "^0.142.0", default-features = false }
 ockam_transport_core = { path = "../ockam_transport_core", version = "^0.104.0", default-features = false }
 ockam_vault = { path = "../ockam_vault", version = "^0.136.0", default-features = false, optional = true }
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.9", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_bare = { version = "0.5.0", default-features = false, features = ["alloc"] }
 serde_json = { version = "1.0", optional = true }
