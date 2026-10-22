@@ -98,7 +98,7 @@ ockam_transport_core = { path = "../ockam_transport_core", version = "^0.104.0",
 ockam_transport_tcp = { path = "../ockam_transport_tcp", version = "^0.140.0", default-features = false, optional = true }
 ockam_transport_udp = { path = "../ockam_transport_udp", version = "^0.84.0", default-features = false, optional = true }
 ockam_vault = { path = "../ockam_vault", version = "^0.136.0", default-features = false, optional = true }
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.9", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 tracing = { version = "0.1", default-features = false }
 

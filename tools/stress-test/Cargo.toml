@@ -18,6 +18,6 @@ ockam = { path = "../../implementations/rust/ockam/ockam" }
 ockam_api = { path = "../../implementations/rust/ockam/ockam_api" }
 ockam_core = { path = "../../implementations/rust/ockam/ockam_core" }
 ockam_multiaddr = { path = "../../implementations/rust/ockam/ockam_multiaddr" }
-rand = "0.8"
+rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 toml = { version = "0.8", default-features = false, features = ["parse"] }

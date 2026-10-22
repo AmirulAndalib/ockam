@@ -93,7 +93,7 @@ opentelemetry = { version = "0.27", features = ["metrics", "trace"] }
 pem-rfc7468 = { version = "0.7.0", features = ["std"] }
 r3bl_rs_utils_core = "0.9.12"
 r3bl_tui = "0.5.8"
-rand = "0.8"
+rand = "0.9"
 regex = "1.10.6"
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
